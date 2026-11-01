@@ -1,0 +1,45 @@
+# Decision log
+
+Recorded 2026-11-01. **Agreed** entries capture user-approved direction.
+**Preparation default** entries are concrete technical defaults selected to make
+Increment 1 implementable; they can be revised with an explicit follow-up entry.
+Future changes should supersede entries rather than erase their rationale.
+
+| ID | Status | Decision and rationale |
+| --- | --- | --- |
+| D001 | Agreed | Build a new standalone `recon` project under `~/Projects/dewaldv`; leave `monzo-cli` and the existing workflow intact. Port useful code selectively rather than transform the CLI or extract a shared library now. |
+| D002 | Agreed | Use Rust, a single local application, and SQLite as the persistent ledger. No hosted service or separate frontend service. |
+| D003 | Agreed | Use devenv + direnv for tools. No Node/npm frontend tooling. |
+| D004 | Agreed | Use Axum + Askama server-rendered HTML + HTMX. Serve a pinned HTMX asset locally, retaining its license; use ordinary CSS and minimal vanilla JavaScript only where necessary. No CDN or bundler. |
+| D005 | Agreed | Optimize for exception review, persistent decisions, bulk operations, and explicit approval—not a spreadsheet clone. All transactions remain inspectable. |
+| D006 | Agreed | Keep import/review offline and credential-free. Phase 1 cannot move money. Monzo execution is a separately validated Phase 2 capability. |
+| D007 | Agreed | Keep categories locally; use descriptions as Monzo notes. Preserve one deposit per purchase. The documented API does not offer category updates. |
+| D008 | Agreed | Retain manual Virgin export/Proton transfer initially; automate downstream work first. Inbox watching is optional later and must never trigger payment approval. |
+| D009 | Agreed | Keep source data, databases, backups, and secrets outside the source repository. Read legacy files without modifying them; commit synthetic fixtures only. |
+| D010 | Agreed | Preserve merchant/account decisions with provenance. Merchant category/description rules and Personal/Joint rules are separate. Activate historical suggestions only after approval; explicit overrides win. |
+| D011 | Agreed | Use integer pennies and strict parsing. Use source identity and persistent handling state rather than `lastpostingdate.txt` as duplicate/payment authority. Surface refunds/fees/ambiguous rows rather than silently discarding them. |
+| D012 | Agreed | Phase 2 uses persisted stable Monzo deduplication keys, immutable approved instructions, explicit confirmation, and separate deposit/note progress. Never repeat a confirmed deposit just to repair a note. |
+| D013 | Agreed | Keep credentials backend-only, injected through `pass-cli run` for online work. Never persist tokens or expose them to browser storage or logs. |
+| D014 | Agreed | First increment is CSV import, transaction table, individual Personal/Joint edits, persistence/restart, and safe reimport. Defer merchant rules, historical decisions migration, bulk editing, exports, and all Monzo access. |
+| D015 | Preparation default | Scope a nonempty Virgin reference to a configured source-account identity. Preserve references as text, including leading zeros. Reuse identity only after checking canonical financial fields; quarantine missing references and conflicting observations. Never use a merchant/date/amount fingerprint as automatic identity. See the investigation. |
+| D016 | Preparation default (implemented) | Version SQL migrations; use SQLite STRICT tables, foreign keys enabled on every connection, and transactional migrations. Use `rusqlite` with bundled SQLite and the online backup API. |
+| D017 | Preparation default | Default to `$XDG_DATA_HOME/recon`, falling back to `$HOME/.local/share/recon`; require absolute non-repository, non-cloud-synced paths for overrides. Create private data directories/files. Separate development databases from real data. |
+| D018 | Preparation default | Bind IPv4 loopback `127.0.0.1:7310` only. Use a per-start random access token exchanged for an HttpOnly, SameSite=Strict session cookie; CSRF tokens plus exact Host/Origin validation protect mutations. No sensitive HTTP route is available without a session. See the security contract. |
+| D019 | Preparation default | Import full source exports without a posting-date cutoff, but label execution history unknown. Account assignment alone is not readiness to pay; old purchases remain ineligible for execution until explicit later disposition. |
+| D020 | Preparation default | Source observations and review decisions are append-only. A repeated identical file is a no-op per source account; overlapping files add provenance without overwriting choices. Keep raw file bytes in SQLite initially for transactional archival and consistent backups. |
+
+## Implementation refinements
+
+### D021 — Browser-compatible referrer policy (implementation default, 2026-11-01)
+
+Use `Referrer-Policy: same-origin`, superseding the prepared `no-referrer` default.
+The Firefox smoke test showed that `no-referrer` makes the Origin of ordinary
+multipart form navigation null. Keep exact Origin validation rather than accepting
+null Origins; `same-origin` still prevents referrer disclosure to other origins.
+
+## Remaining open decisions
+
+- Merchant pattern/rule language and historical suggestion thresholds.
+- Reliable Monzo transaction correlation for notes (must be solved before live execution).
+- Refund/fee financial treatment and any future withdrawal support.
+- Any Proton acquisition integration or persistent OAuth workflow.
