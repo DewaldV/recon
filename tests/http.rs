@@ -123,15 +123,15 @@ async fn upload_review_fragments_and_normal_form_fallback() {
     assert!(html.contains("missing_reference"));
     let response = app
         .clone()
-        .oneshot(request("GET", "/purchases", &cookie, "", "text/html"))
+        .oneshot(request("GET", "/review", &cookie, "", "text/html"))
         .await
         .unwrap();
     let html = text(response).await;
-    assert!(html.contains("2 purchases"));
+    assert!(html.contains("2 distinct purchases"));
     assert!(html.contains("<!doctype html>"));
     let mut edit = request(
         "POST",
-        "/purchases/1/account",
+        "/review/1/account",
         &cookie,
         format!("csrf={csrf}&version=0&account=personal&page=1"),
         "application/x-www-form-urlencoded",
@@ -141,7 +141,7 @@ async fn upload_review_fragments_and_normal_form_fallback() {
     let response = app.clone().oneshot(edit).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let html = text(response).await;
-    assert!(html.starts_with("<tr"));
+    assert!(html.starts_with("<section id=\"review-workspace\""));
     assert!(!html.contains("<!doctype html>"));
     assert!(html.contains("value=\"personal\" selected"));
     assert!(html.contains("name=\"version\" value=\"1\""));
@@ -149,7 +149,7 @@ async fn upload_review_fragments_and_normal_form_fallback() {
         .clone()
         .oneshot(request(
             "POST",
-            "/purchases/1/account",
+            "/review/1/account",
             &cookie,
             format!("csrf={csrf}&version=0&account=joint"),
             "application/x-www-form-urlencoded",
@@ -161,7 +161,7 @@ async fn upload_review_fragments_and_normal_form_fallback() {
         .clone()
         .oneshot(request(
             "POST",
-            "/purchases/1/account",
+            "/review/1/account",
             &cookie,
             format!("csrf={csrf}&version=1&account=joint"),
             "application/x-www-form-urlencoded",
@@ -178,7 +178,7 @@ async fn host_origin_authentication_and_csrf_are_required() {
     let (_directory, app, cookie, csrf) = app().await;
     let response = app
         .clone()
-        .oneshot(request("GET", "/purchases", "", "", "text/html"))
+        .oneshot(request("GET", "/review", "", "", "text/html"))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -243,7 +243,7 @@ async fn host_origin_authentication_and_csrf_are_required() {
             app.clone()
                 .oneshot(request(
                     "POST",
-                    "/purchases/1/account",
+                    "/review/1/account",
                     &cookie,
                     form,
                     "application/x-www-form-urlencoded"
@@ -269,7 +269,7 @@ async fn imported_html_and_filenames_are_escaped_and_security_headers_present() 
     );
     let response = app
         .clone()
-        .oneshot(request("GET", "/purchases", &cookie, "", "text/html"))
+        .oneshot(request("GET", "/review", &cookie, "", "text/html"))
         .await
         .unwrap();
     assert_eq!(response.headers()["cache-control"], "no-store");
@@ -319,13 +319,13 @@ async fn pagination_fragments_and_not_found() {
         csv.push('\n');
     }
     upload(&app, &cookie, &csrf, &csv).await;
-    let mut req = request("GET", "/purchases?page=2", &cookie, "", "text/html");
+    let mut req = request("GET", "/review?page=2", &cookie, "", "text/html");
     req.headers_mut()
         .insert("hx-request", "true".parse().unwrap());
     let html = text(app.clone().oneshot(req).await.unwrap()).await;
     assert!(!html.contains("<!doctype html>"));
-    assert!(html.contains("page 2 of 2"));
-    assert_eq!(html.matches("<tr id=\"purchase-").count(), 1);
+    assert!(html.contains("Page 2 of 2"));
+    assert_eq!(html.matches("<tr id=\"review-").count(), 1);
     let response = app
         .clone()
         .oneshot(request("GET", "/imports/999", &cookie, "", "text/html"))
@@ -346,6 +346,115 @@ async fn startup_landing_has_no_secrets_or_financial_data() {
     assert!(!html.contains("SYNTHETIC"));
     assert!(!html.contains("csrf"));
     assert!(html.contains("/assets/app.js"));
+}
+
+#[tokio::test]
+async fn old_purchase_bookmarks_redirect_to_the_single_review_workspace() {
+    let (_directory, app, cookie, _csrf) = app().await;
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/purchases?page=2",
+            &cookie,
+            "",
+            "text/html",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+    let location = response.headers()["location"].to_str().unwrap();
+    assert!(location.starts_with("/review?"));
+    assert!(location.contains("page=2"));
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", "/review", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(!html.contains("Allocations"));
+    assert!(!html.contains("href=\"/purchases"));
+    assert!(html.contains("id=\"review-workspace\""));
+}
+
+#[tokio::test]
+async fn inline_account_edits_refresh_filter_membership_counts_and_bulk_versions() {
+    let (_directory, app, cookie, csrf) = app().await;
+    upload(&app, &cookie, &csrf, FIRST).await;
+    let path = "/review/1/account?q=SYNTHETIC%20SHOP&account=unset&missing=account&import_id=1&view=attention&page=1";
+    let mut req = request(
+        "POST",
+        path,
+        &cookie,
+        format!("csrf={csrf}&version=0&account=personal"),
+        "application/x-www-form-urlencoded",
+    );
+    req.headers_mut()
+        .insert("hx-request", "true".parse().unwrap());
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("1 distinct purchases"));
+    assert!(html.contains("missing account 1"));
+    assert!(!html.contains("id=\"review-1\""));
+    assert!(html.contains("id=\"review-2\""));
+    assert!(html.contains("form=\"bulk-review\" name=\"pick_2_0\""));
+    assert!(html.contains("value=\"SYNTHETIC SHOP\""));
+    assert!(html.contains("name=\"import_id\" type=\"number\" min=\"1\" value=\"1\""));
+    assert!(html.contains("hx-target=\"#review-workspace\""));
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/review/1/account?q=SYNTHETIC%20SHOP&import_id=1",
+            &cookie,
+            format!("csrf={csrf}&version=1&account=joint"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()["location"].to_str().unwrap();
+    assert!(location.starts_with("/review?"));
+    assert!(location.contains("q=SYNTHETIC%20SHOP"));
+    assert!(location.contains("import_id=1"));
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", location, &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("name=\"pick_1_2\""));
+    assert!(html.contains("value=\"joint\" selected"));
+}
+
+#[tokio::test]
+async fn invalid_return_filters_cannot_commit_an_inline_edit() {
+    let (_directory, app, cookie, csrf) = app().await;
+    upload(&app, &cookie, &csrf, FIRST).await;
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/review/1/account?account=invalid",
+            &cookie,
+            format!("csrf={csrf}&version=0&account=personal"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", "/review", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("name=\"pick_1_0\""));
+    assert!(html.contains("missing account 2"));
 }
 
 #[tokio::test]
@@ -512,7 +621,7 @@ async fn bulk_review_http_stale_preview_and_selection_bounds() {
     app.clone()
         .oneshot(request(
             "POST",
-            "/purchases/2/account",
+            "/review/2/account",
             &cookie,
             format!("csrf={csrf}&version=0&account=personal"),
             "application/x-www-form-urlencoded",

@@ -113,26 +113,36 @@ def run():
             assert execute("return location.hash") == ""
             import_file()
             click("a.button")
-            wait("return !!document.querySelector('#purchase-1 select')")
+            wait("return !!document.querySelector('#review-1 select')")
             assert execute("return typeof htmx !== 'undefined' && !htmx.config.allowEval && !htmx.config.allowScriptTags")
             execute("window.reconSmokeMarker = 'no-navigation'; return true")
-            click("#purchase-1 option[value=personal]")
-            click("#purchase-1 button")
-            wait("return document.querySelector('#purchase-1 input[name=version]').value === '1'")
+            click("#review-1 option[value=personal]")
+            click("#review-1 button")
+            wait("return document.querySelector('#review-1 input[name=version]').value === '1'")
             assert execute("return window.reconSmokeMarker") == "no-navigation", "Expected HTMX update, not full-page fallback"
-            assert execute("return document.querySelector('#purchase-1 select').value") == "personal"
+            assert execute("return document.querySelector('#review-1 select').value") == "personal"
+            assert execute("return document.querySelector('#review-1 input[type=checkbox]').form.id") == "bulk-review"
+            assert execute("return document.body.textContent.includes('missing account 1')")
+            # Inline editing must refresh filter membership, not leave a stale row.
+            navigate("http://127.0.0.1:7310/review?account=unset")
+            wait("return !!document.querySelector('#review-2 select')")
+            click("#review-2 option[value=joint]")
+            click("#review-2 button")
+            wait("return document.body.textContent.includes('0 distinct purchases')")
+            navigate("http://127.0.0.1:7310/review")
+            wait("return !!document.querySelector('#review-1 select')")
             call("POST", prefix + "/refresh", {})
-            wait("return document.querySelector('#purchase-1 select')?.value === 'personal'")
+            wait("return document.querySelector('#review-1 select')?.value === 'personal'")
             stop(app)
             app, url = start_app(data)
-            navigate("http://127.0.0.1:7310/purchases")
+            navigate("http://127.0.0.1:7310/review")
             assert execute("return document.body.textContent.includes('startup link')")
             navigate(url)
             wait("return !!document.querySelector('input[type=file]')")
             import_file()
             click("a.button")
-            wait("return document.querySelector('#purchase-1 select')?.value === 'personal'")
-            assert execute("return document.querySelectorAll('tr[id^=purchase-]').length") == 2
+            wait("return document.querySelector('#review-1 select')?.value === 'personal'")
+            assert execute("return document.querySelectorAll('tr[id^=review-]').length") == 2
             # Increment 2: catalogue preview, coalescing, bulk review, and overrides.
             navigate("http://127.0.0.1:7310/review")
             wait("return document.body.textContent.includes('2 distinct purchases')")

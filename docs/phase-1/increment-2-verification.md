@@ -4,8 +4,12 @@ Implemented 2026-11-01. No real merchant/workbook data was accessed or imported.
 
 ## Workflow
 
-Open **Review** after uploading an original Virgin export. The earlier Allocations
-page remains available for individual HTMX account edits.
+Open **Review** after uploading an original Virgin export. It is now the single
+workspace for inline Personal/Joint edits, bulk changes, and merchant details.
+The former `/purchases` allocation screen redirects to `/review`, preserving its
+page query. Saving an individual account refreshes the filtered workspace, counts,
+and selection versions; it clears the current page selection. Normal forms return
+to the same filters when HTMX is unavailable.
 
 - Filter by merchant substring, account, missing field, source conflict, import ID,
   needs-attention, or review-complete. Counts describe distinct purchases in the
@@ -63,7 +67,8 @@ review commits take a verified snapshot before mutation.
 
 ## Verification
 
-Formatting, Clippy with warnings denied, and all 35 Rust tests pass. New coverage:
+Formatting, Clippy with warnings denied, and all 38 Rust tests pass after review
+consolidation. Coverage includes:
 
 - Catalogue parsing, normalization collisions, identical rows, conflicting choices,
   provenance, category approval, later edits, and idempotent reimport.
@@ -74,14 +79,17 @@ Formatting, Clippy with warnings denied, and all 35 Rust tests pass. New coverag
 - Injected database failures during bulk and catalogue commits roll everything back.
 - HTTP authentication, CSRF/Origin protections, blank filters, escaped preview
   values, confirmation, replay rejection, and stale multi-row submissions.
+- The single review screen, legacy bookmark redirect, inline filter/count refresh,
+  updated bulk versions, and invalid-return-filter rejection before any edit.
 
 The Firefox smoke script now includes catalogue upload/coalescing, bulk allocation,
 complete-view filtering, purchase overrides, default changes preserving overrides,
 clearing overrides, and restart persistence, alongside the original HTMX checks.
-It could not run in this restricted environment: geckodriver returns
-`Operation not permitted` when binding its local listener. Run
-`recon-browser-check` in the normal development shell before declaring browser
-acceptance complete. The extended browser assertions remain unverified here.
+The earlier attempt was blocked by geckodriver listener permissions. The latest
+consolidation attempt started geckodriver but could not start the test app because
+port 7310 is occupied. The existing process was left untouched. Stop the app and
+run `recon-browser-check` before declaring browser acceptance complete. The extended
+browser assertions (including inline filter membership refresh) remain unverified.
 
 Separate real-data validation from the plan remains pending: use a disposable
 database and a selected merchant export, report aggregate coverage/conflicts, and

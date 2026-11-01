@@ -55,6 +55,10 @@ Do not add routes or dependencies for a future executor now.
 
 ## HTTP sketch
 
+Historical Increment 1 routes below are superseded by the single `/review`
+workspace (D022); `/purchases` now redirects and inline edits use
+`POST /review/{id}/account`.
+
 - Bootstrap/session exchange via a non-sensitive landing page and URL fragment;
   remove the token from browser history immediately after exchange.
 - `GET /`: authenticated dashboard/import form.

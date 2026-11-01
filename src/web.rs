@@ -16,7 +16,7 @@ use tokio::sync::Semaphore;
 use crate::{
     Error, Result,
     importer::MAX_UPLOAD,
-    storage::{ImportSummary, PurchasePage, PurchaseRow, Store},
+    storage::{ImportSummary, Store},
 };
 
 #[derive(Clone)]
@@ -92,13 +92,13 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(home))
         .route("/imports", post(upload))
         .route("/imports/{id}", get(import_summary))
-        .route("/purchases", get(purchases))
+        .route("/purchases", get(legacy_purchases))
         .route("/review", get(review))
         .route("/review/stage", post(stage_change))
         .route("/review/catalogue", post(catalogue_upload))
         .route("/review/previews/{token}", get(review_preview))
         .route("/review/previews/{token}/commit", post(commit_change))
-        .route("/purchases/{id}/account", post(decide))
+        .route("/review/{id}/account", post(decide))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 64 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -268,44 +268,8 @@ async fn import_summary(
     })
 }
 
-#[derive(Default, Deserialize)]
-struct PageQuery {
-    page: Option<i64>,
-}
-
-#[derive(Template)]
-#[template(path = "purchases.html")]
-struct Purchases {
-    csrf: String,
-    data: PurchasePage,
-}
-
-#[derive(Template)]
-#[template(path = "table.html")]
-struct Table {
-    csrf: String,
-    data: PurchasePage,
-}
-
-async fn purchases(
-    State(state): State<AppState>,
-    Query(query): Query<PageQuery>,
-    headers: HeaderMap,
-) -> Result<Html<String>> {
-    let data = state
-        .work(move |s| s.purchases(query.page.unwrap_or(1)))
-        .await?;
-    if is_htmx(&headers) {
-        render(Table {
-            csrf: state.0.csrf.clone(),
-            data,
-        })
-    } else {
-        render(Purchases {
-            csrf: state.0.csrf.clone(),
-            data,
-        })
-    }
+async fn legacy_purchases(Query(filters): Query<crate::review::Filters>) -> Redirect {
+    Redirect::permanent(&review_link(&filters, filters.page.unwrap_or(1)))
 }
 
 #[derive(Deserialize)]
@@ -313,20 +277,12 @@ struct DecisionForm {
     csrf: String,
     version: i64,
     account: String,
-    page: Option<i64>,
-}
-
-#[derive(Template)]
-#[template(path = "row.html")]
-struct Row {
-    csrf: String,
-    row: PurchaseRow,
-    page: i64,
 }
 
 async fn decide(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(filters): Query<crate::review::Filters>,
     headers: HeaderMap,
     Form(form): Form<DecisionForm>,
 ) -> Result<Response> {
@@ -335,19 +291,21 @@ async fn decide(
             "Invalid CSRF token. Reload the page.".into(),
         ));
     }
-    let page = form.page.unwrap_or(1).max(1);
-    let row = state
-        .work(move |s| s.decide(id, form.version, &form.account))
+    let query = filters.clone();
+    let (data, defaults) = state
+        .work(move |s| {
+            // Validate the return filters before committing any decision.
+            s.review_page(&query)?;
+            s.decide(id, form.version, &form.account)?;
+            Ok((s.review_page(&query)?, s.merchant_default(&query.q)?))
+        })
         .await?;
+    let view = review_context(&state, filters, data, defaults);
     if is_htmx(&headers) {
-        Ok(render(Row {
-            csrf: state.0.csrf.clone(),
-            row,
-            page,
-        })?
-        .into_response())
+        // Refresh counts, filter membership, pagination, and bulk versions together.
+        Ok(render(ReviewWorkspace { view })?.into_response())
     } else {
-        Ok(Redirect::to(&format!("/purchases?page={page}")).into_response())
+        Ok(Redirect::to(&review_link(&view.filters, view.data.page)).into_response())
     }
 }
 
@@ -375,6 +333,14 @@ impl IntoResponse for Error {
 #[derive(Template)]
 #[template(path = "review.html")]
 struct Review {
+    view: ReviewContext,
+}
+#[derive(Template)]
+#[template(path = "review_workspace.html")]
+struct ReviewWorkspace {
+    view: ReviewContext,
+}
+struct ReviewContext {
     csrf: String,
     data: crate::review::ReviewPage,
     filters: crate::review::Filters,
@@ -382,42 +348,61 @@ struct Review {
     default_description: String,
     previous: String,
     next: String,
+    query: String,
 }
 async fn review(
     State(state): State<AppState>,
     Query(filters): Query<crate::review::Filters>,
+    headers: HeaderMap,
 ) -> Result<Html<String>> {
     let query = filters.clone();
-    let data = state.work(move |s| s.review_page(&query)).await?;
-    fn link(f: &crate::review::Filters, page: usize) -> String {
-        fn encode(s: &str) -> String {
-            s.bytes()
-                .map(|b| {
-                    if b.is_ascii_alphanumeric() {
-                        char::from(b).to_string()
-                    } else {
-                        format!("%{b:02X}")
-                    }
-                })
-                .collect()
-        }
-        format!(
-            "/review?q={}&account={}&missing={}&view={}&page={page}{}",
-            encode(&f.q),
-            encode(&f.account),
-            encode(&f.missing),
-            encode(&f.view),
-            f.import_id
-                .map(|i| format!("&import_id={i}"))
-                .unwrap_or_default()
-        )
+    let (data, defaults) = state
+        .work(move |s| Ok((s.review_page(&query)?, s.merchant_default(&query.q)?)))
+        .await?;
+    let view = review_context(&state, filters, data, defaults);
+    if is_htmx(&headers) {
+        render(ReviewWorkspace { view })
+    } else {
+        render(Review { view })
     }
-    let merchant = filters.q.clone();
-    let (default_category, default_description) =
-        state.work(move |s| s.merchant_default(&merchant)).await?;
-    let previous = link(&filters, data.page.saturating_sub(1).max(1));
-    let next = link(&filters, data.page + 1);
-    render(Review {
+}
+
+fn review_link(f: &crate::review::Filters, page: usize) -> String {
+    fn encode(s: &str) -> String {
+        s.bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() {
+                    char::from(b).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect()
+    }
+    format!(
+        "/review?q={}&account={}&missing={}&view={}&page={page}{}",
+        encode(&f.q),
+        encode(&f.account),
+        encode(&f.missing),
+        encode(&f.view),
+        f.import_id
+            .map(|id| format!("&import_id={id}"))
+            .unwrap_or_default()
+    )
+}
+
+fn review_context(
+    state: &AppState,
+    filters: crate::review::Filters,
+    data: crate::review::ReviewPage,
+    (default_category, default_description): (String, String),
+) -> ReviewContext {
+    let previous = review_link(&filters, data.page.saturating_sub(1).max(1));
+    let next = review_link(&filters, data.page + 1);
+    let query = review_link(&filters, data.page)
+        .trim_start_matches("/review?")
+        .to_owned();
+    ReviewContext {
         csrf: state.0.csrf.clone(),
         data,
         filters,
@@ -425,7 +410,8 @@ async fn review(
         next,
         default_category,
         default_description,
-    })
+        query,
+    }
 }
 fn check_csrf(state: &AppState, form: &std::collections::HashMap<String, String>) -> Result<()> {
     if !form.get("csrf").is_some_and(|v| equal(v, &state.0.csrf)) {

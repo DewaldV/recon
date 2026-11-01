@@ -16,8 +16,9 @@ implemented. Review-complete means **details complete; payment history unknown**
 Setting an account or merchant details does not make a purchase payable.
 
 See [Increment 2 usage and verification](docs/phase-1/increment-2-verification.md).
-Rust checks pass; the extended Firefox smoke test needs a run outside the current
-restricted environment, which prevents geckodriver from binding its local port.
+Rust checks pass. The extended Firefox smoke test remains pending: the latest
+attempt was blocked by an existing app on port 7310, which was left running.
+Stop the app before running `recon-browser-check`.
 
 ## Development
 
@@ -41,7 +42,10 @@ Use `cargo run -- --data-dir /absolute/private/local/path` to override it. Do no
 put a live database in Proton Drive or another sync folder. Set `RECON_SYNC_ROOTS`
 to colon-separated additional sync roots to reject them explicitly.
 
-Upload an original Virgin CSV, inspect its exception summary, and open Purchases.
+Upload an original Virgin CSV, inspect its exception summary, and open Review.
+`/review` combines individual account edits, bulk actions, and merchant enrichment.
+Old `/purchases` bookmarks redirect to Review. Inline saves refresh the filtered
+workspace and clear its page selection so counts and bulk decision versions stay current.
 Only one underlying Virgin account (`virgin-primary`) is supported in this first
 interface; Personal/Joint are review allocations, not separate source accounts.
 Full rolling exports include old history. They are not a list of unpaid purchases.
