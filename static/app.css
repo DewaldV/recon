@@ -38,8 +38,12 @@ details[open] > summary { margin-bottom: 1rem; }
 .secondary { color: #146750; background: white; }
 .badge { display: inline-block; background: #eaf1ec; border-radius: .3rem; padding: .2rem .5rem; font-size: .85rem; }
 .badge.success { background: #d8eee4; color: #123b34; }
+.badge.missing { background: #fff3bf; color: #664d03; }
+.badge.error { background: #f8d7da; color: #842029; }
 .notice { border-left: 4px solid #b27b27; background: #fff6e6; padding: 1rem; }
 .source-excerpt { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+#rule-merchant { display: block; width: 100%; max-width: 48rem; }
+#rule-search-label input { width: 100%; max-width: 32rem; }
 .filters label { display: flex; flex-direction: column; gap: .3rem; }
 .filters input { width: 14rem; }
 input[type=password] { width: 30rem; }

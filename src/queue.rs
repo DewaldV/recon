@@ -84,6 +84,13 @@ impl DetailRow {
             Eligibility::Staged => "Staged",
         }
     }
+    pub fn queue_status_class(&self) -> &'static str {
+        match self.eligibility() {
+            Eligibility::NeedsReview | Eligibility::Staged => "success",
+            Eligibility::MissingDetails if self.amount_pence > 0 => "missing",
+            _ => "error",
+        }
+    }
     pub fn can_stage(&self) -> bool {
         self.outstanding() && self.complete() && self.amount_pence > 0
     }
@@ -227,6 +234,13 @@ pub struct PurchaseEdit {
     pub stage: bool,
 }
 
+pub struct PageAccountEdit {
+    pub id: i64,
+    pub signature: String,
+    pub original: String,
+    pub account: String,
+}
+
 impl PurchaseEdit {
     fn validate(&self) -> Result<()> {
         if !matches!(self.account.as_str(), "" | "personal" | "joint")
@@ -279,6 +293,53 @@ impl PurchaseEdit {
 }
 
 impl Store {
+    /// Only changed controls become explicit decisions. One stale change rolls back the page.
+    pub fn save_page_accounts(&mut self, edits: &[PageAccountEdit]) -> Result<usize> {
+        if edits.len() > 50
+            || edits.iter().map(|e| e.id).collect::<BTreeSet<_>>().len() != edits.len()
+        {
+            return Err(Error::Invalid(
+                "Save at most 50 distinct purchases on this page.".into(),
+            ));
+        }
+        for edit in edits {
+            if !matches!(edit.account.as_str(), "" | "personal" | "joint")
+                || !matches!(edit.original.as_str(), "" | "personal" | "joint")
+            {
+                return Err(Error::Invalid("Choose unset, Personal, or Joint.".into()));
+            }
+        }
+        let changed: Vec<_> = edits.iter().filter(|e| e.account != e.original).collect();
+        if changed.is_empty() {
+            return Ok(0);
+        }
+        self.backup()?;
+        self.atomic(|store| {
+            let rows = store.detail_rows()?;
+            for edit in &changed {
+                let row = rows
+                    .iter()
+                    .find(|r| r.id == edit.id)
+                    .ok_or(Error::NotFound)?;
+                if row.signature() != edit.signature || row.account != edit.original {
+                    return Err(Error::Stale);
+                }
+                store.execution_editable(&[row.id])?;
+                if row.conflict {
+                    return Err(Error::Invalid(
+                        "Resolve source conflicts before changing accounts.".into(),
+                    ));
+                }
+                let account = (!edit.account.is_empty()).then_some(&edit.account);
+                store.db.execute(
+                    "INSERT INTO review_decisions(purchase_id,version,account) VALUES(?1,?2,?3)",
+                    params![row.id, row.version + 1, account],
+                )?;
+            }
+            Ok(changed.len())
+        })
+    }
+
     pub fn edit_purchase(&mut self, edit: PurchaseEdit) -> Result<()> {
         self.execution_editable(&[edit.id])?;
         edit.validate()?;

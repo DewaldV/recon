@@ -116,6 +116,7 @@ pub fn router(state: AppState) -> Router {
         .route("/imports/{id}", get(import_summary))
         .route("/purchases", get(legacy_purchases))
         .route("/review", get(review))
+        .route("/review/accounts", post(save_page_accounts))
         .route("/merchants", get(workflow::merchants))
         .route("/rules", get(workflow::rules))
         .route("/run", get(workflow::prepare))
@@ -351,6 +352,51 @@ fn is_htmx(headers: &HeaderMap) -> bool {
     headers.get("hx-request").is_some_and(|v| v == "true")
 }
 
+async fn save_page_accounts(
+    State(state): State<AppState>,
+    Query(filters): Query<crate::review::Filters>,
+    headers: HeaderMap,
+    Form(form): Form<std::collections::HashMap<String, String>>,
+) -> Result<Response> {
+    state.check_csrf(form.get("csrf").map(String::as_str).unwrap_or_default())?;
+    let mut edits = Vec::new();
+    for (key, account) in &form {
+        let Some(id) = key.strip_prefix("account_") else {
+            continue;
+        };
+        let field = |prefix: &str| {
+            form.get(&format!("{prefix}_{id}")).cloned().ok_or_else(|| {
+                Error::Invalid("Incomplete page account edit. Reload the page.".into())
+            })
+        };
+        edits.push(crate::queue::PageAccountEdit {
+            id: id
+                .parse()
+                .map_err(|_| Error::Invalid("Invalid purchase ID.".into()))?,
+            signature: field("signature")?,
+            original: field("original")?,
+            account: account.clone(),
+        });
+    }
+    edits.sort_by_key(|edit| edit.id);
+    let query = filters.clone();
+    let (data, saved) = state
+        .work(move |s| {
+            // Validate return filters before any writes, as with individual editing.
+            s.review_page(&query)?;
+            let saved = s.save_page_accounts(&edits)?;
+            Ok((s.review_page(&query)?, saved))
+        })
+        .await?;
+    let mut view = review_context(&state, filters, data);
+    view.saved_accounts = saved;
+    if is_htmx(&headers) {
+        Ok(render(ReviewWorkspace { view })?.into_response())
+    } else {
+        Ok(Redirect::to(&review_link(&view.filters, view.data.page)).into_response())
+    }
+}
+
 fn render(template: impl Template) -> Result<Html<String>> {
     template.render().map(Html).map_err(|_| Error::Worker)
 }
@@ -400,6 +446,7 @@ struct ReviewContext {
     return_to: String,
     active_run: Option<i64>,
     import_notice: Option<ImportSummary>,
+    saved_accounts: usize,
 }
 async fn review(
     State(state): State<AppState>,
@@ -469,6 +516,7 @@ fn review_context(
         return_to,
         active_run,
         import_notice: None,
+        saved_accounts: 0,
     }
 }
 async fn stage_change(

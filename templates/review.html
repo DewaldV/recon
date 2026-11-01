@@ -16,7 +16,7 @@
       <fieldset><legend>Account</legend><label>Allocate to <select name="account"><option value="personal">Personal</option><option value="joint">Joint</option><option value="">Use rule / unset</option></select></label><button name="action" value="accounts" data-selection-action>Preview account changes</button></fieldset>
       <fieldset><legend>Merchant details</legend><p class="muted">Blank clears an override and uses the merchant default.</p><label>Category <input name="category" list="categories" maxlength="200"></label><label>Description <textarea name="description" maxlength="4000"></textarea></label><button name="action" value="details" data-selection-action>Preview selected overrides</button></fieldset>
       <fieldset><legend>Handling exception</legend><label>Disposition <select name="handling"><option value="external">Handled externally</option><option value="excluded">Excluded</option><option value="unknown">Unknown</option><option value="outstanding">Reopen as outstanding</option></select></label><label>Reason / evidence <textarea name="reason" maxlength="4000"></textarea></label><label><input type="checkbox" name="reopen"> I checked the evidence to reopen previously handled work.</label><button name="action" value="handling" data-selection-action>Preview handling changes</button></fieldset>
-    </div></details><small>Selection applies to this page only. Inline saves clear selection.</small>
+    </div></details><small>Selection applies to this page only. Saving page accounts clears selection.</small>
   </div>
 </form>
 {% include "review_workspace.html" %}

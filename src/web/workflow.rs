@@ -4,7 +4,7 @@ use crate::{
     monzo::Monzo,
     queue::QueueSummary,
     review::{DetailRow, Filters},
-    rules::AccountRule,
+    rules::{AccountRule, MerchantChoice},
 };
 
 pub(super) fn return_path(value: &str) -> Result<String> {
@@ -19,6 +19,12 @@ pub(super) fn return_path(value: &str) -> Result<String> {
             .map_err(|_| Error::Invalid("Invalid return filters.".into()))?;
         filters.validate()?;
         return Ok(review_link(&filters, filters.page.unwrap_or(1)));
+    }
+    if let Some(query) = value.strip_prefix("/rules?") {
+        let query: RuleQuery = serde_urlencoded::from_str(query)
+            .map_err(|_| Error::Invalid("Invalid rule selection.".into()))?;
+        crate::rules::validate_rule(&query.merchant, &query.card, &query.account)?;
+        return Ok(rule_link(&query.merchant, &query.card));
     }
     if let Some(id) = value
         .strip_prefix("/imports/")
@@ -65,6 +71,20 @@ struct Rules {
     rules: Vec<AccountRule>,
     merchant: String,
     card: String,
+    merchants: Vec<MerchantChoice>,
+    cards: Vec<String>,
+    seen_cards: std::collections::BTreeSet<String>,
+    account: String,
+    version: i64,
+    return_to: String,
+}
+impl Rules {
+    fn selected_card(&self, card: &str) -> bool {
+        self.card == card
+    }
+    fn used_card(&self, card: &str) -> bool {
+        self.seen_cards.contains(card)
+    }
 }
 #[derive(Default, Deserialize)]
 pub(super) struct RuleQuery {
@@ -72,16 +92,69 @@ pub(super) struct RuleQuery {
     merchant: String,
     #[serde(default)]
     card: String,
+    #[serde(default)]
+    account: String,
 }
+
+fn rule_link(merchant: &str, card: &str) -> String {
+    let query = serde_urlencoded::to_string([("merchant", merchant), ("card", card)])
+        .expect("rule selection contains only strings");
+    format!("/rules?{query}")
+}
+
 pub(super) async fn rules(
     State(state): State<AppState>,
     Query(q): Query<RuleQuery>,
 ) -> Result<Html<String>> {
+    let (rules, choices, merchant, card, account, version, seen_cards) = state
+        .work(move |s| {
+            if !matches!(q.account.as_str(), "" | "personal" | "joint") {
+                return Err(Error::Invalid("Invalid suggested account.".into()));
+            }
+            let merchant = if q.merchant.is_empty() {
+                String::new()
+            } else {
+                s.canonical_rule_merchant(&q.merchant)?
+            };
+            let choices = s.rule_choices()?;
+            let card = q.card.trim().to_owned();
+            if !card.is_empty() && !choices.cards.contains(&card) {
+                return Err(Error::Invalid(
+                    "Choose a card from your imported transactions or existing rules.".into(),
+                ));
+            }
+            let key = crate::review::normalize(&merchant);
+            let rules = s.account_rules()?;
+            let current = rules.iter().find(|r| r.key == key && r.card == card);
+            let account = current.map(|r| r.account.clone()).unwrap_or_else(|| {
+                if q.account.is_empty() {
+                    "personal".into()
+                } else {
+                    q.account
+                }
+            });
+            let version = current.map_or(0, |r| r.version);
+            let seen_cards = choices
+                .merchants
+                .iter()
+                .find(|m| m.key == key)
+                .map(|m| m.cards.clone())
+                .unwrap_or_default();
+            Ok((rules, choices, merchant, card, account, version, seen_cards))
+        })
+        .await?;
+    let return_to = rule_link(&merchant, &card);
     render(Rules {
         csrf: state.0.csrf.clone(),
-        rules: state.work(|s| s.account_rules()).await?,
-        merchant: q.merchant,
-        card: q.card,
+        rules,
+        merchant,
+        card,
+        account,
+        version,
+        seen_cards,
+        return_to,
+        merchants: choices.merchants,
+        cards: choices.cards,
     })
 }
 

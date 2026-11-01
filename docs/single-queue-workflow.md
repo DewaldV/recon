@@ -9,10 +9,19 @@
 3. Use **Merchants** to import `Merchant,Category,Description` defaults or approve
    exact aliases. Use **Account rules** for merchant or merchant+card defaults.
    Explicit purchase choices win, then merchant+card, then merchant-wide rules.
+   Account rules now provide a searchable merchant list (including catalogue-only
+   merchants and aliases) and a card dropdown. Choose a merchant and **Any card**
+   or a specific card, then **Load selection**. Cards seen for that merchant are
+   labelled. Existing rules load their current account, including disabled rules.
+   **Edit rule** in the rule list opens the same editor directly.
 4. Open **Review / edit** to complete a purchase. **Save for later** keeps it in
    review; **Save and stage** atomically saves and confirms that it needs funding.
-   Bulk actions use page selection and an exact preview. Inline saves clear the
-   selection while preserving unrelated drafts and keyboard focus.
+   Set account dropdowns across the visible page, then click **Save page accounts**
+   once to save all changed choices atomically. Unchanged rows retain their rule
+   provenance and staging. The unsaved count tracks pending choices; save before
+   staging, filtering or changing pages. A stale changed row rejects the entire
+   save. Page saves refresh totals/filter membership and clear bulk selection
+   while preserving unrelated drafts. Bulk actions use page selection and an exact preview.
 5. Mark already-funded purchases **Handled externally** with evidence. **Excluded**
    is a separate disposition. Reopening either requires explicit confirmation and
    evidence. Merely setting an account or importing Paid No proves no funding status.
@@ -25,6 +34,18 @@ Staging records an exact effective-decision signature. Relevant changes return a
 purchase to review; unrelated merchant changes and identical-file reimports do
 not. **Return to review** removes approval without marking it handled. Old named
 workspace membership does not stage anything.
+
+**Remember account choice** on a review row opens the rule editor with that saved
+merchant, card and account. The purchase editor also links to its saved choice;
+save purchase edits before following the link. An existing rule's current setting
+takes precedence over the suggested account. These links only open the editor.
+
+Rule approval previews show current and proposed accounts, preserved explicit
+choices and recorded runs, and how many staged purchases need staging again.
+Card-specific previews include only matching cards; merchant-wide rules respect
+more-specific rules. Disabling a card rule falls back to the merchant-wide rule.
+Confirm and Cancel return to the selected rule. Merchant search uses local
+JavaScript; selection, loading and approval also work with ordinary HTML forms.
 
 ## Run and resume
 

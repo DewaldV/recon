@@ -37,6 +37,10 @@ document.addEventListener("htmx:afterRequest", event => {
   }
 });
 
+function pendingAccounts() {
+  return [...document.querySelectorAll('[data-page-account]')].filter(select => select.value !== select.dataset.original);
+}
+
 function updateSelection() {
   const boxes = [...document.querySelectorAll('input[form="bulk-review"]:not(:disabled)')];
   const count = boxes.filter(box => box.checked).length;
@@ -44,9 +48,17 @@ function updateSelection() {
   if (label) label.textContent = `${count} selected on this page`;
   const all = document.getElementById("select-page");
   if (all) { all.checked = count > 0 && count === boxes.length; all.indeterminate = count > 0 && count < boxes.length; }
-  document.querySelectorAll("[data-selection-action]").forEach(button => { button.disabled = count === 0; });
+  document.querySelectorAll("[data-selection-action]").forEach(button => { button.disabled = count === 0 || pendingAccounts().length > 0; });
+  const save = document.getElementById("save-page-accounts");
+  if (save) save.disabled = pendingAccounts().length === 0;
 }
+let lastAccountFocus = null;
 document.addEventListener("change", event => {
+  if (event.target.matches('[data-page-account]')) {
+    lastAccountFocus = event.target.id;
+    const count = pendingAccounts().length;
+    document.getElementById("account-edit-count").textContent = count ? `${count} unsaved account choices on this page` : "No unsaved account changes.";
+  }
   if (event.target.id === "select-page") {
     document.querySelectorAll('input[form="bulk-review"]:not(:disabled)').forEach(box => { box.checked = event.target.checked; });
   }
@@ -54,7 +66,7 @@ document.addEventListener("change", event => {
 });
 let restoreFocus = null;
 document.addEventListener("htmx:beforeRequest", event => {
-  restoreFocus = event.detail.elt.querySelector("select[id]")?.id || null;
+  restoreFocus = event.detail.elt.id === "page-accounts" ? lastAccountFocus : null;
 });
 document.addEventListener("htmx:afterSwap", () => {
   updateSelection();
@@ -68,3 +80,36 @@ document.addEventListener("formdata", event => {
   event.target.querySelectorAll('input[name="token"]').forEach(input => { input.value = ""; });
 });
 if (document.querySelector("#run-progress[data-refresh=true]")) setTimeout(() => location.reload(), 2000);
+
+const rulePicker = document.getElementById("rule-picker");
+if (rulePicker) {
+  const search = document.getElementById("rule-merchant-search");
+  const merchants = document.getElementById("rule-merchant");
+  const cards = document.getElementById("rule-card");
+  const status = document.getElementById("rule-search-status");
+  const options = [...merchants.options];
+  const normalize = value => value.trim().replace(/\s+/g, " ").toLowerCase();
+  document.getElementById("rule-search-label").hidden = false;
+  status.hidden = false;
+  search.addEventListener("input", () => {
+    const query = normalize(search.value);
+    const selected = merchants.value;
+    const matches = options.filter(option => !option.value || normalize(option.textContent).includes(query));
+    merchants.replaceChildren(...matches);
+    merchants.value = matches.some(option => option.value === selected) ? selected : "";
+    status.textContent = `${matches.length - 1} merchants match`;
+    updateCards();
+  });
+  function updateCards() {
+    const seen = new Set(JSON.parse(merchants.selectedOptions[0]?.dataset.cards || "[]"));
+    [...cards.options].forEach(option => {
+      if (option.value) option.textContent = option.value + (seen.has(option.value) ? " · used for this merchant" : "");
+    });
+  }
+  merchants.addEventListener("change", updateCards);
+  // Editing always applies to the explicitly loaded scope, not an unsubmitted selection.
+  rulePicker.addEventListener("change", () => {
+    const editor = document.getElementById("account-rule-editor");
+    if (editor) editor.hidden = true;
+  });
+}

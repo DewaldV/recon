@@ -14,10 +14,114 @@ use tower::ServiceExt;
 const FIRST: &str = include_str!("fixtures/virgin-first.csv");
 
 #[tokio::test]
+async fn rule_picker_prefills_current_and_disabled_rules_and_returns_to_selection() {
+    let (_directory, app, cookie, csrf) = app().await;
+    upload(&app, &cookie, &csrf, FIRST).await;
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", "/rules", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("id=\"rule-merchant\""));
+    assert!(html.contains("value=\"SYNTHETIC SHOP\""));
+    assert!(html.contains("value=\"0000\""));
+    assert!(!html.contains("id=\"account-rule-editor\""));
+    let selection = "/rules?merchant=SYNTHETIC%20SHOP&card=0000&account=joint";
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", selection, &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("value=\"joint\" selected"));
+    assert!(html.contains("used for this merchant"));
+    let return_to =
+        serde_urlencoded::to_string([("return_to", "/rules?merchant=SYNTHETIC%20SHOP&card=0000")])
+            .unwrap();
+    let response = app.clone().oneshot(request("POST","/review/stage",&cookie,format!("csrf={csrf}&action=account_rule&merchant=SYNTHETIC+SHOP&card=0000&account=joint&{return_to}"),"application/x-www-form-urlencoded")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let preview = response.headers()["location"].to_str().unwrap();
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", preview, &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("2 matching purchases · 2 effective decisions change"));
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("{preview}/commit"),
+            &cookie,
+            format!("csrf={csrf}"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()["location"],
+        "/rules?merchant=SYNTHETIC+SHOP&card=0000"
+    );
+    let html = text(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/rules?merchant=SYNTHETIC+SHOP&card=0000&account=personal",
+                &cookie,
+                "",
+                "text/html",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("Edit rule · version 1"));
+    assert!(
+        html.contains("value=\"joint\" selected"),
+        "existing choice beats contextual suggestion"
+    );
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=account_rule&merchant=SYNTHETIC+SHOP&card=0000&account=",
+    )
+    .await;
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", selection, &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("value=\"\" selected>Disable this rule"));
+    for path in [
+        "/rules?merchant=Unknown",
+        "/rules?merchant=SYNTHETIC+SHOP&card=unknown",
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", path, &cookie, "", "text/html"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
+
+#[tokio::test]
 async fn execution_edit_and_history_routes_reject_untrusted_requests_without_echoing_credentials() {
     let (directory, app, cookie, csrf) = app().await;
     let token = "synthetic-private-credential";
     let forms = [
+        ("/review/accounts", "account_1=joint&original_1=&signature_1=stale".into()),
         ("/runs/start", format!("revision=0&token={token}")),
         ("/runs/1/resume", format!("token={token}")),
         ("/runs/1/notes/1", format!("token={token}&transaction=tx_test&confirmed=on")),
@@ -105,6 +209,125 @@ async fn execution_edit_and_history_routes_reject_untrusted_requests_without_ech
             .unwrap(),
         0
     );
+}
+
+#[tokio::test]
+async fn page_account_form_saves_mixed_choices_atomically_with_htmx_and_plain_forms() {
+    let (_directory, app, cookie, csrf) = app().await;
+    upload(&app, &cookie, &csrf, FIRST).await;
+    let page = text(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/review?account=unset",
+                &cookie,
+                "",
+                "text/html",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let signature = |id: i64| {
+        page.split(&format!("name=\"signature_{id}\" value=\""))
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let fields = format!(
+        "csrf={csrf}&account_1=personal&original_1=&signature_1={}&account_2=joint&original_2=&signature_2={}",
+        signature(1),
+        signature(2)
+    );
+    let mut req = request(
+        "POST",
+        "/review/accounts?account=unset",
+        &cookie,
+        fields.clone(),
+        "application/x-www-form-urlencoded",
+    );
+    req.headers_mut()
+        .insert("hx-request", "true".parse().unwrap());
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("Saved 2 account choices."));
+    assert!(html.contains("0 distinct purchases"));
+    assert!(!html.contains("id=\"review-1\""));
+    // Reusing the submitted page cannot overwrite the newer decisions.
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/review/accounts",
+                &cookie,
+                fields,
+                "application/x-www-form-urlencoded"
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let page = text(
+        app.clone()
+            .oneshot(request("GET", "/review", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let signature = page
+        .split("name=\"signature_1\" value=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let fields = format!("csrf={csrf}&account_1=joint&original_1=personal&signature_1={signature}");
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/review/accounts?account=invalid",
+                &cookie,
+                fields.clone(),
+                "application/x-www-form-urlencoded"
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/review/accounts?view=all",
+            &cookie,
+            fields,
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(
+        response.headers()["location"]
+            .to_str()
+            .unwrap()
+            .contains("view=all")
+    );
+    let page = text(
+        app.clone()
+            .oneshot(request("GET", "/review", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(page.contains("name=\"original_1\" value=\"joint\""));
+    assert!(page.contains("name=\"original_2\" value=\"joint\""));
 }
 
 fn request(
@@ -246,7 +469,7 @@ async fn upload_review_fragments_and_normal_form_fallback() {
     assert!(html.starts_with("<section id=\"review-workspace\""));
     assert!(!html.contains("<!doctype html>"));
     assert!(html.contains("value=\"personal\" selected"));
-    assert!(html.contains("name=\"version\" value=\"1\""));
+    assert!(html.contains("name=\"pick_1_1\""));
     let response = app
         .clone()
         .oneshot(request(

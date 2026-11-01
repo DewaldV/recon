@@ -9,7 +9,14 @@
 {% if !reason.is_empty() %}<p>Reason/evidence: {{ reason }}</p>{% endif %}
 {% if reopen %}<p class="warning">Explicit reopening was requested. A previously externally handled or excluded purchase may become outstanding again. Check the evidence carefully: this can cause duplicate funding.</p>{% endif %}
 {% if !account.is_empty() %}<p>New account: <strong>{{ account }}</strong></p>{% endif %}
+{% if let Some(impact) = data.rule_impact %}
+<h2>Account rule impact</h2>
+<p>{{ impact.purchases.len() }} matching purchases · {{ impact.changed }} effective decisions change · {{ impact.explicit_choices }} explicit account choices preserved · {{ impact.fixed_runs }} recorded run instructions preserved.</p>
+<p><strong>{{ impact.restage }} staged purchases will need staging again.</strong> A new rule version can require staging again even when the account stays the same. Handling states are preserved.</p>
+<div class="table-scroll"><table><thead><tr><th>Purchase</th><th>Current account</th><th>After approval</th><th>Effect</th></tr></thead><tbody>{% for row in impact.purchases %}<tr><td>#{{ row.id }} {{ row.merchant }}</td><td>{% if row.before.is_empty() %}Unset{% else %}{{ row.before }}{% endif %}</td><td>{% if row.after.is_empty() %}Unset{% else %}{{ row.after }}{% endif %}</td><td>{{ row.effect }}{% if row.restage %}<strong class="reference">Stage again</strong>{% endif %}</td></tr>{% else %}<tr><td colspan="4">No existing purchases match this scope. This rule will apply to future matching imports.</td></tr>{% endfor %}</tbody></table></div>
+{% else %}
 <p>{{ data.affected.len() }} potentially affected purchases. {{ data.preserved }} purchases have explicit overrides; merchant default and alias changes preserve them. Selected override changes replace both override fields.</p>
+{% endif %}
 <form method="post" action="/review/previews/{{ data.token }}/commit"><input type="hidden" name="csrf" value="{{ csrf }}">
 {% if !data.historical.is_empty() %}
 {% if data.duplicate %}<p>This historical source was already imported. Confirmation is a no-op.</p>{% endif %}

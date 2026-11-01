@@ -1,6 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Account rules</h1><p>Purchase choice → merchant + card rule → merchant rule → needs review. Rules fill details; staging remains explicit.</p>
-<form method="post" action="/review/stage" class="panel"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="account_rule"><input type="hidden" name="return_to" value="/rules"><label>Exact merchant <input name="merchant" value="{{ merchant }}" required maxlength="1000"></label><label>Exact card (blank for any) <input name="card" value="{{ card }}" maxlength="200"></label><label>Account <select name="account"><option value="personal">Personal</option><option value="joint">Joint</option><option value="">Disable this rule</option></select></label><button>Preview rule</button></form>
-<div class="table-scroll"><table><thead><tr><th>Merchant</th><th>Card</th><th>Account</th><th>Version</th></tr></thead><tbody>{% for rule in rules %}<tr><td><a href="/rules?merchant={{ rule.merchant|urlencode }}&amp;card={{ rule.card|urlencode }}">{{ rule.merchant }}</a></td><td>{% if rule.card.is_empty() %}Any{% else %}{{ rule.card }}{% endif %}</td><td>{% if rule.account.is_empty() %}Disabled{% else %}{{ rule.account }}{% endif %}</td><td>{{ rule.version }}</td></tr>{% else %}<tr><td colspan="4">No approved rules yet.</td></tr>{% endfor %}</tbody></table></div>
+<h1>Account rules</h1>
+<p>Purchase choice → merchant + card rule → merchant rule → needs review. Rules fill details; staging remains explicit.</p>
+<form method="get" action="/rules" class="panel" id="rule-picker">
+  <h2>Choose a merchant and card</h2>
+  <label id="rule-search-label" hidden>Search merchants <input type="search" id="rule-merchant-search" placeholder="Search names or aliases" autocomplete="off" aria-controls="rule-merchant"></label>
+  <label for="rule-merchant">Merchant from purchases or catalogue</label>
+  <select id="rule-merchant" name="merchant" size="6" required aria-describedby="rule-merchant-help">
+    <option value="" {% if merchant.is_empty() %}selected{% endif %}>Choose a merchant…</option>
+    {% for choice in merchants %}<option value="{{ choice.name }}" data-cards="{{ choice.cards_json() }}" {% if choice.name == merchant %}selected{% endif %}>{{ choice.name }}{% if !choice.aliases.is_empty() %} · aliases: {{ choice.aliases }}{% endif %}</option>{% endfor %}
+  </select>
+  <p id="rule-merchant-help" class="muted">Select an exact merchant; aliases use their canonical merchant. Missing a merchant? <a href="/merchants">Add a merchant default</a>.</p>
+  <p id="rule-search-status" role="status" hidden></p>
+  <label>Card <select id="rule-card" name="card">
+    <option value="" {% if card.is_empty() %}selected{% endif %}>Any card</option>
+    {% for choice in cards %}<option value="{{ choice }}" {% if self.selected_card(choice) %}selected{% endif %}>{{ choice }}{% if self.used_card(choice) %} · used for this merchant{% endif %}</option>{% endfor %}
+  </select></label>
+  <p class="muted">Cards come from imported purchases and existing rules. Any card creates a merchant-wide rule.</p>
+  <button>Load selection</button>
+</form>
+{% if !merchant.is_empty() %}
+<form method="post" action="/review/stage" class="panel" id="account-rule-editor">
+  <h2>{% if version > 0 %}Edit rule · version {{ version }}{% else %}Create account rule{% endif %}</h2>
+  <p><strong>{{ merchant }}</strong> · {% if card.is_empty() %}Any card{% else %}Card {{ card }}{% endif %}</p>
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="account_rule"><input type="hidden" name="return_to" value="{{ return_to }}">
+  <input type="hidden" name="merchant" value="{{ merchant }}"><input type="hidden" name="card" value="{{ card }}">
+  <label>Account <select name="account"><option value="personal" {% if account == "personal" %}selected{% endif %}>Personal</option><option value="joint" {% if account == "joint" %}selected{% endif %}>Joint</option><option value="" {% if account.is_empty() %}selected{% endif %}>Disable this rule</option></select></label>
+  <p class="muted">Disabling a card-specific rule falls back to the merchant-wide rule. Explicit purchase choices are preserved.</p>
+  <button>Preview rule</button>
+</form>
+{% endif %}
+<h2>Existing rules</h2>
+<div class="table-scroll"><table><thead><tr><th>Merchant</th><th>Card</th><th>Account</th><th>Version</th><th>Action</th></tr></thead><tbody>{% for rule in rules %}<tr><td>{{ rule.merchant }}</td><td>{% if rule.card.is_empty() %}Any{% else %}{{ rule.card }}{% endif %}</td><td>{% if rule.account.is_empty() %}Disabled{% else %}{{ rule.account }}{% endif %}</td><td>{{ rule.version }}</td><td><a href="/rules?merchant={{ rule.merchant|urlencode }}&amp;card={{ rule.card|urlencode }}">Edit rule<span class="sr-only"> for {{ rule.merchant }} {% if rule.card.is_empty() %}any card{% else %}card {{ rule.card }}{% endif %}</span></a></td></tr>{% else %}<tr><td colspan="5">No approved rules yet.</td></tr>{% endfor %}</tbody></table></div>
 {% endblock %}

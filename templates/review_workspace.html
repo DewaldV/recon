@@ -7,6 +7,12 @@
   </div>
   {% if let Some(id) = view.active_run %}<p class="notice">A recon is in progress. <a href="/runs/{{ id }}">View or resume recon #{{ id }}</a>.</p>{% endif %}
   <p class="muted">{{ view.data.total }} distinct purchases in this view · missing account {{ view.data.missing_account }} · category {{ view.data.missing_category }} · description {{ view.data.missing_description }} · source conflicts {{ view.data.conflicts }}. Totals above cover the whole queue.</p>
+  <form id="page-accounts" method="post" action="/review/accounts?{{ view.query }}" hx-post="/review/accounts?{{ view.query }}" hx-target="#review-workspace" hx-swap="outerHTML" hx-disabled-elt="#save-page-accounts, [data-page-account]" class="selection-toolbar panel">
+    <input type="hidden" name="csrf" value="{{ view.csrf }}">
+    <button id="save-page-accounts">Save page accounts</button>
+    <span id="account-edit-count" role="status">{% if view.saved_accounts > 0 %}Saved {{ view.saved_accounts }} account choices.{% else %}Choose accounts below, then save this page.{% endif %}</span>
+    <small>Only changed choices are saved. Save before staging or moving to another page.</small>
+  </form>
   <div class="table-scroll"><table>
     <thead><tr><th><input type="checkbox" id="select-page" aria-label="Select this page only"></th><th>Purchase</th><th class="amount">Amount</th><th>Account</th><th>Details</th><th>Status</th></tr></thead>
     <tbody>{% for row in view.data.rows %}
@@ -14,14 +20,16 @@
         <td><input type="checkbox" form="bulk-review" name="pick_{{ row.id }}_{{ row.version }}" value="{{ row.signature() }}" aria-label="Select {{ row.merchant }}" {% if row.in_run %}disabled{% endif %}></td>
         <td><strong>{{ row.merchant }}</strong><small class="reference">{{ row.date }} · Card {{ row.card }}</small><a href="/review/{{ row.id }}/edit?{{ view.query }}">Review / edit</a></td>
         <td class="amount">£{{ row.amount }}</td>
-        <td><form action="/review/{{ row.id }}/account?{{ view.query }}" method="post" hx-post="/review/{{ row.id }}/account?{{ view.query }}" hx-target="#review-workspace" hx-swap="outerHTML" class="allocation">
-          <input type="hidden" name="csrf" value="{{ view.csrf }}"><input type="hidden" name="version" value="{{ row.version }}">
+        <td>
+          {% if !row.conflict && !row.in_run %}
+          <input type="hidden" form="page-accounts" name="original_{{ row.id }}" value="{{ row.account }}">
+          <input type="hidden" form="page-accounts" name="signature_{{ row.id }}" value="{{ row.signature() }}">
+          {% endif %}
           <label class="sr-only" for="account-{{ row.id }}">Account for {{ row.merchant }}</label>
-          <select id="account-{{ row.id }}" name="account" {% if row.conflict || row.in_run %}disabled{% endif %}><option value="" {% if row.account == "" %}selected{% endif %}>Use rule / unset</option><option value="personal" {% if row.account == "personal" %}selected{% endif %}>Personal</option><option value="joint" {% if row.account == "joint" %}selected{% endif %}>Joint</option></select>
-          <button class="secondary" {% if row.conflict || row.in_run %}disabled{% endif %}>Save</button>
-        </form><small class="reference">{{ row.account_source }}</small></td>
+          <select id="account-{{ row.id }}" form="page-accounts" name="account_{{ row.id }}" data-page-account data-original="{{ row.account }}" {% if row.conflict || row.in_run %}disabled{% endif %}><option value="" {% if row.account == "" %}selected{% endif %}>Use rule / unset</option><option value="personal" {% if row.account == "personal" %}selected{% endif %}>Personal</option><option value="joint" {% if row.account == "joint" %}selected{% endif %}>Joint</option></select>
+          <small class="reference">{{ row.account_source }}</small><a href="/rules?merchant={{ row.merchant|urlencode }}&amp;card={{ row.card|urlencode }}&amp;account={{ row.account|urlencode }}">Remember saved account choice</a></td>
         <td>{{ row.category }}<small class="reference">{{ row.description }}</small></td>
-        <td><span class="badge {% if row.staged %}success{% endif %}">{{ row.queue_status() }}</span><small class="reference">{{ row.handling_reason }}</small><a href="/review/{{ row.id }}/history">History</a></td>
+        <td><span class="badge {{ row.queue_status_class() }}">{{ row.queue_status() }}</span><small class="reference">{{ row.handling_reason }}</small><a href="/review/{{ row.id }}/history">History</a></td>
       </tr>
       {% else %}<tr><td colspan="6">No matching purchases. <a href="/review?view=outstanding">View all outstanding</a>.</td></tr>{% endfor %}
     </tbody>

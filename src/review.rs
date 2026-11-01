@@ -232,6 +232,7 @@ pub struct Preview {
     pub duplicate: bool,
     pub return_to: String,
     pub historical: Vec<crate::history_import::HistoricalRow>,
+    pub rule_impact: Option<crate::rules::RuleImpact>,
 }
 impl Store {
     pub fn detail_rows(&self) -> Result<Vec<DetailRow>> {
@@ -679,9 +680,16 @@ impl Store {
             .into_iter()
             .filter(|r| {
                 let key = normalize(&r.merchant);
-                ids.contains(&r.id)
+                let merchant_matches = ids.contains(&r.id)
                     || keys.contains(&key)
-                    || aliases.get(&key).is_some_and(|k| keys.contains(k))
+                    || aliases.get(&key).is_some_and(|k| keys.contains(k));
+                merchant_matches
+                    && match &change {
+                        Change::AccountRule { card, .. } => {
+                            card.trim().is_empty() || r.card == card.trim()
+                        }
+                        _ => true,
+                    }
             })
             .collect();
         let preserved = affected
@@ -691,6 +699,14 @@ impl Store {
                     || r.description_source.starts_with("purchase override")
             })
             .count();
+        let rule_impact = match &change {
+            Change::AccountRule {
+                merchant,
+                card,
+                account,
+            } => Some(self.rule_impact(&affected, merchant, card, account)?),
+            _ => None,
+        };
         Ok(Preview {
             token: token.into(),
             change,
@@ -699,6 +715,7 @@ impl Store {
             catalogue,
             duplicate,
             historical,
+            rule_impact,
             return_to: self
                 .db
                 .query_row(

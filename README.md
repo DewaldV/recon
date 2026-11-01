@@ -9,6 +9,7 @@ execute resumable transfers into Monzo pots.
 The current flow is **Import → Review → Stage → Run**:
 
 - One global outstanding queue, with Personal/Joint totals and approved merchant/account defaults.
+- Searchable merchant/card rule selection, prefilled rule editing, and account-change/staging impact previews.
 - Individual Save and stage, bulk review, version-checked staging, and explicit external-funding/exclusion decisions.
 - Reference-matched historical CSV migration with provenance and preservation of existing decisions.
 - One immutable run at a time, temporary Monzo tokens, persisted deposit results and deduplication keys, and restart/resume.
@@ -43,10 +44,11 @@ put a live database in Proton Drive or another sync folder. Set `RECON_SYNC_ROOT
 to colon-separated additional sync roots to reject them explicitly.
 
 Upload an original Virgin CSV to open Review, with a link to source exceptions.
-`/review` combines individual account edits, bulk actions, and staging. Merchant
+`/review` combines page-wide account editing, bulk actions, and staging. Merchant
 defaults and account rules have separate screens. Run recon includes every
 outstanding purchase, regardless of filters, after all blockers are resolved.
-Old `/purchases` bookmarks redirect to Review. Inline saves refresh the filtered
+Choose accounts across the page and click **Save page accounts** once. Only changed
+choices are saved, atomically. Old `/purchases` bookmarks redirect to Review. Saves refresh the filtered
 workspace and clear its page selection so counts and bulk decision versions stay current.
 Only one underlying Virgin account (`virgin-primary`) is supported in this first
 interface; Personal/Joint are review allocations, not separate source accounts.
