@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"selfRequestsOnly":true}'>
+  <title>Recon · local review</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/htmx.min.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <header><a href="/" class="brand">Recon</a><nav><a href="/">Import</a><a href="/review">Review</a><a href="/purchases">Allocations</a></nav><span>Offline · no payments</span></header>
+  <main>
+    <p id="request-error" role="alert" hidden></p>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Account choices are review decisions, not evidence of payment. Execution history is unknown.</footer>
+</body>
+</html>

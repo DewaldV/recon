@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p>Confirm the proposed change below. Changes to imports or review decisions invalidate this preview; return to review and prepare a fresh preview.</p>
+{% if !merchant.is_empty() %}<p>Merchant: <strong>{{ merchant }}</strong></p>{% endif %}
+{% if !target.is_empty() %}<p>Use defaults from: <strong>{{ target }}</strong></p>{% endif %}
+{% if !catalogue && account.is_empty() && target.is_empty() %}<p>Category: <strong>{{ category }}</strong><br>Description: <strong>{{ description }}</strong></p>{% endif %}
+{% if !account.is_empty() %}<p>New account: <strong>{{ account }}</strong></p>{% endif %}
+<p>{{ data.affected.len() }} potentially affected purchases. {{ data.preserved }} purchases have explicit overrides; merchant default and alias changes preserve them. Selected override changes replace both override fields.</p>
+<form method="post" action="/review/previews/{{ data.token }}/commit"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if catalogue %}
+<p>Identical definitions are coalesced. For conflicts, explicitly choose at most one row per normalized merchant. Leaving all rows for a merchant unchecked skips it. The purchase list below includes every merchant in this upload; only checked definitions are applied. Incomplete definitions retain missing fields.</p>
+{% if data.duplicate %}<p>This file was already imported. Committing is a no-op and preserves later edits.</p>{% endif %}
+<div class="table-scroll"><table><thead><tr><th>Apply</th><th>Record</th><th>Merchant</th><th>Category</th><th>Description</th><th>Status</th></tr></thead><tbody>{% for (row,status,selected) in data.catalogue %}<tr><td><input type="checkbox" name="record_{{ row.record }}" {% if selected %}checked{% endif %} {% if data.duplicate %}disabled{% endif %} aria-label="Apply record {{ row.record }}"></td><td>{{ row.record }}</td><td>{{ row.merchant }}</td><td>{{ row.category }}</td><td>{{ row.description }}</td><td>{{ status }}</td></tr>{% endfor %}</tbody></table></div>
+{% endif %}
+<label><input type="checkbox" name="allow_categories"> Approve adding any new category values shown above to the local category catalogue. Case/whitespace variants use the existing category.</label>
+<button>Confirm changes</button> <a href="/review">Cancel</a>
+</form>
+<h2>Affected purchases (current values)</h2>
+<div class="table-scroll"><table><thead><tr><th>Purchase</th><th>Account</th><th>Category</th><th>Description</th></tr></thead><tbody>{% for row in data.affected %}<tr><td>#{{ row.id }} {{ row.date }} {{ row.merchant }} · £{{ row.amount }}{% if row.conflict %}<strong class="warning">Source conflict remains blocked</strong>{% endif %}</td><td>{{ row.account }}</td><td>{{ row.category }}<small class="reference">{{ row.category_source }}</small></td><td>{{ row.description }}<small class="reference">{{ row.description_source }}</small></td></tr>{% else %}<tr><td colspan="4">No existing purchases affected. Defaults also apply to later imports.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

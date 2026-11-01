@@ -1,0 +1,3 @@
+Transaction Date,Posting Date,Billing Amount,Merchant,Merchant City,Merchant State,Merchant Postcode,Reference Number,Debit or Credit,SICMCC Code,Status,Transaction Currency,Additional Card Holder,Card Used
+2026-10-01,2026-10-02,12.34,SYNTHETIC SHOP,TEST CITY,GBR,TEST,00000000000000000000002,DBIT,PR,BILLED,GBP,false,0000
+2026-10-03,2026-10-04,8.90,"SYNTHETIC CAFE, TEST",TEST CITY,GBR,TEST,00000000000000000000003,DBIT,PR,BILLED,GBP,true,1111

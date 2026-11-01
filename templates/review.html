@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Review purchases</h1>
+<p>Review-complete means details complete; payment history unknown.</p>
+<form method="get" action="/review" class="panel filters">
+<label>Merchant search <input name="q" value="{{ filters.q }}"></label>
+<label>View <select name="view"><option value="all">All purchases</option><option value="attention" {% if filters.view == "attention" %}selected{% endif %}>Needs attention</option><option value="complete" {% if filters.view == "complete" %}selected{% endif %}>Review-complete</option></select></label>
+<label>Account <select name="account"><option value="">Any</option><option value="unset" {% if filters.account == "unset" %}selected{% endif %}>Unset</option><option value="personal" {% if filters.account == "personal" %}selected{% endif %}>Personal</option><option value="joint" {% if filters.account == "joint" %}selected{% endif %}>Joint</option></select></label>
+<label>Missing / blocked <select name="missing"><option value="">Any</option><option value="account" {% if filters.missing == "account" %}selected{% endif %}>Account</option><option value="category" {% if filters.missing == "category" %}selected{% endif %}>Category</option><option value="description" {% if filters.missing == "description" %}selected{% endif %}>Description</option><option value="conflict" {% if filters.missing == "conflict" %}selected{% endif %}>Source conflict</option></select></label>
+<label>Import ID <input name="import_id" type="number" min="1" value="{% if let Some(id) = filters.import_id %}{{ id }}{% endif %}"></label><button>Filter</button>
+</form>
+<p>{{ data.total }} distinct purchases in this view · missing account {{ data.missing_account }} · category {{ data.missing_category }} · description {{ data.missing_description }} · source conflicts {{ data.conflicts }}. Missing-field counts can overlap.</p>
+<form method="post" action="/review/stage" id="bulk-review">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<p>Select specific purchases on this page. Nothing on other pages is selected.</p>
+<div class="table-scroll"><table><thead><tr><th>Select</th><th>Date / merchant / card</th><th>Amount</th><th>Account</th><th>Category</th><th>Description</th></tr></thead><tbody>
+{% for row in data.rows %}<tr id="review-{{ row.id }}"><td><input type="checkbox" name="pick_{{ row.id }}_{{ row.version }}" aria-label="Select {{ row.merchant }}" {% if row.conflict %}disabled{% endif %}></td><td>{{ row.date }}<br><a href="/review?q={{ row.merchant|urlencode }}">{{ row.merchant }}</a><small class="reference">{{ row.card }}</small>{% if row.conflict %}<strong class="warning">Source conflict · blocked</strong>{% endif %}</td><td class="amount">£{{ row.amount }}</td><td>{{ row.account }}</td><td>{{ row.category }}<small class="reference">{{ row.category_source }}</small></td><td>{{ row.description }}<small class="reference">{{ row.description_source }}</small></td></tr>{% else %}<tr><td colspan="6">No matching purchases.</td></tr>{% endfor %}
+</tbody></table></div>
+<div class="panel"><label>Account for selected purchases <select name="account"><option value="personal">Personal</option><option value="joint">Joint</option><option value="">Unset</option></select></label><button name="action" value="accounts">Preview account changes</button>
+<h2>Selected purchase overrides</h2><p>These replace the selected purchases' overrides for both fields. A blank field clears its override and restores the current merchant default.</p>
+<label>Category <input name="category" list="categories" maxlength="200"></label><label>Description <textarea name="description" maxlength="4000"></textarea></label><button name="action" value="details">Preview selected overrides</button></div>
+</form>
+<nav aria-label="Review pages">{% if data.page > 1 %}<a href="{{ previous }}">Previous</a>{% endif %}<span>Page {{ data.page }} of {{ data.pages }}</span>{% if data.page < data.pages %}<a href="{{ next }}">Next</a>{% endif %}</nav>
+<datalist id="categories">{% for name in data.categories %}<option value="{{ name }}">{% endfor %}</datalist>
+<h2>Merchant defaults</h2>
+<p>Exact names use case and whitespace normalization. Saving a default enriches existing and future purchases; purchase overrides are preserved.</p>
+<form method="post" action="/review/stage" class="panel"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="default">
+<label>Merchant <input name="merchant" value="{{ filters.q }}" required maxlength="1000"></label><label>Category <input name="category" list="categories" maxlength="200" value="{{ default_category }}"></label><label>Description <textarea name="description" maxlength="4000">{{ default_description }}</textarea></label><button>Preview merchant default</button></form>
+<h2>Merchants missing details</h2><ul>{% for (name,count) in data.groups %}<li><a href="/review?q={{ name|urlencode }}">{{ name }}</a> · {{ count }} purchases</li>{% else %}<li>No missing merchant details in this view.</li>{% endfor %}</ul>
+<h2>Exact aliases</h2><form method="post" action="/review/stage" class="panel"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="alias"><label>Variant merchant name <input name="merchant" required maxlength="1000"></label><label>Existing merchant default name <input name="target" required maxlength="1000"></label><button>Preview alias</button></form>
+<h2>Import merchant catalogue</h2><p>Export the merchant sheet as UTF-8 CSV with exactly Merchant, Category, Description columns. Formula cells must be exported as their displayed values. Originals remain untouched.</p>
+<form method="post" action="/review/catalogue" enctype="multipart/form-data" class="panel"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Merchant CSV (10 MiB maximum) <input name="file" type="file" accept=".csv,text/csv" required></label><button>Preview catalogue</button></form>
+{% endblock %}

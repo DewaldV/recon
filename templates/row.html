@@ -1,0 +1,16 @@
+<tr id="purchase-{{ row.id }}">
+<td>{{ row.transaction_date }}</td>
+<td><strong>{{ row.merchant }}</strong><small class="reference">{{ row.reference }}</small>{% if row.conflict %}<small class="warning">Conflicting source data · edits blocked</small>{% endif %}</td>
+<td>{{ row.card_used }}</td><td class="amount">£{{ row.amount }}</td>
+<td>
+<form action="/purchases/{{ row.id }}/account" method="post" hx-post="/purchases/{{ row.id }}/account" hx-target="#purchase-{{ row.id }}" hx-swap="outerHTML" class="allocation">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ row.version }}"><input type="hidden" name="page" value="{{ page }}">
+<label class="sr-only" for="account-{{ row.id }}">Account for {{ row.merchant }}</label>
+<select id="account-{{ row.id }}" name="account" {% if row.conflict %}disabled{% endif %}>
+<option value="" {% if row.account == "" %}selected{% endif %}>Unset</option>
+<option value="personal" {% if row.account == "personal" %}selected{% endif %}>Personal</option>
+<option value="joint" {% if row.account == "joint" %}selected{% endif %}>Joint</option>
+</select><button type="submit" {% if row.conflict %}disabled{% endif %}>Save</button>
+<span class="sr-only">Decision version {{ row.version }}</span>
+</form>
+</td></tr>

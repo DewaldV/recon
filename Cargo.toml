@@ -1,0 +1,26 @@
+[package]
+name = "recon"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+askama = "0.14"
+axum = { version = "0.8", features = ["multipart"] }
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+fs2 = "0.4"
+getrandom = "0.3"
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

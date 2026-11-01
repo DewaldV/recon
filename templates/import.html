@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Import #{{ summary.id }}</h1><p>{{ summary.filename }}</p>
+<p>{{ summary.total }} source records accounted for. Reuploading an identical file returns this same import.</p>
+<dl class="counts">{% for (kind, count) in summary.counts %}<div><dt>{{ kind }}</dt><dd>{{ count }}</dd></div>{% endfor %}</dl>
+<p><a class="button" href="/purchases">Review purchases</a></p>
+<p><a href="/review?import_id={{ summary.id }}">Review merchant details and bulk allocations for this import</a></p>
+<h2>Exceptions and non-purchases</h2>
+<p class="muted">Nothing here is silently discarded or automatically repaired. Resolution of these exceptions is outside this increment.</p>
+<div class="table-scroll"><table><thead><tr><th>CSV record</th><th>Disposition</th><th>Reason</th></tr></thead><tbody>
+{% for exception in summary.exceptions %}<tr><td>{{ exception.record_number }}</td><td>{{ exception.disposition }}</td><td>{{ exception.reason }}</td></tr>{% else %}<tr><td colspan="3">No exceptions.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}
