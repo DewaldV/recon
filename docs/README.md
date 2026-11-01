@@ -83,6 +83,7 @@ handled externally and prevent duplicate funding, subject to confirmed row match
 - [Increment 1: Import, review, persist](phase-1/increment-1.md)
 - [Increment 2: Merchant enrichment and exception review](phase-1/increment-2.md)
 - [Increment 3: Historical handling, account rules, and recon totals](phase-1/increment-3.md)
+- [Increment 3 / Slice 1: Handling, recon scope, and totals](phase-1/increment-3-slice-1.md)
 - [Initial schema contract](phase-1/schema.md)
 
 1. [Offline import and review](phase-1-import-and-review.md).

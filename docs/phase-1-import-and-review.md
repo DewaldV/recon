@@ -14,8 +14,9 @@ Implementation sequence:
    — implemented; review completeness only, no payment-history inference.
    Extended Firefox and real-data acceptance remain outstanding.
 3. [Increment 3: Historical handling, account rules, and recon totals](phase-1/increment-3.md)
-   — planned; explicit outstanding eligibility and guarded compatibility exports,
-   still without Monzo access or money movement.
+   — in progress; [Slice 1](phase-1/increment-3-slice-1.md) adds handling, explicit
+   scope, and totals. Migration/rules/exception repair/exports remain planned;
+   there is still no Monzo access or money movement.
 
 ### 1. Domain and storage
 

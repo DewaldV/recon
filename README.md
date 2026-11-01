@@ -11,9 +11,16 @@ merchant catalogue preview/import, versioned category/description defaults, exac
 aliases, purchase overrides, filtered review, and atomic bulk Personal/Joint edits.
 Private local sessions, version-checked edits, and verified backups remain in place.
 
-No account rules, historical spreadsheet migration, exports, or Monzo access are
-implemented. Review-complete means **details complete; payment history unknown**.
-Setting an account or merchant details does not make a purchase payable.
+Increment 3's first slice adds explicit handling states, named recon selections,
+decision history, and outstanding-ready Personal/Joint totals. See the
+[Slice 1 guide](docs/phase-1/increment-3-slice-1.md) for usage and limitations.
+Unknown history, external funding (legacy Paid = Yes), exclusions, and blocked
+rows do not enter those totals. Setting an account or merchant details alone
+does not make a purchase outstanding-ready.
+
+Account rules, historical spreadsheet migration, source-exception repair, exports,
+approval, and Monzo access are not implemented. Review-complete still means
+details complete, not evidence of funding or permission to execute.
 
 See [Increment 2 usage and verification](docs/phase-1/increment-2-verification.md).
 Rust checks pass. The extended Firefox smoke test remains pending: the latest
@@ -68,6 +75,7 @@ Full rolling exports include old history. They are not a list of unpaid purchase
 - [First increment](docs/phase-1/increment-1.md)
 - [Increment 2 scope](docs/phase-1/increment-2.md)
 - [Increment 3 plan](docs/phase-1/increment-3.md)
+- [Increment 3 / Slice 1 usage and verification](docs/phase-1/increment-3-slice-1.md)
 - [Increment 1 verification](docs/phase-1/increment-1-verification.md)
 - [Frontend choice and alternatives](docs/frontend-options.md)
 - [Phase 1: Offline import and review](docs/phase-1-import-and-review.md)

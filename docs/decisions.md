@@ -61,7 +61,26 @@ source-row match and provenance before migration; this meaning does not resolve
 ambiguous matches or prove that `Paid = No` remains outstanding today. No existing
 purchase handling state is changed by recording this clarification.
 
-## Still open
+## Further implementation defaults
+
+### D024 — Increment 3 delivery slices (implementation default)
+
+Deliver the large increment in the documented slices, starting with handling,
+explicit recon selection, and totals. Historical migration, source-exception
+repair, account rules, and export/handoff remain separate later slices. Do not
+label the whole increment complete or offer payment/export operations early.
+
+### D025 — Handling and recon scope safeguards (implementation default)
+
+Unknown is a virtual initial handling state, not a fabricated historical decision.
+Manual state changes need evidence notes and preview/confirmation. Reopening any
+purchase with prior external/excluded history requires explicit confirmation,
+even after an intermediate unknown state. Global handling survives imports and
+workspace changes. One purchase may belong to only one active recon; archive and
+membership events never settle it. Archived selections retain history but are
+never ready. SQL constraints and audit triggers back these domain rules.
+
+## Remaining open decisions
 
 - Merchant pattern/rule language and historical suggestion thresholds.
 - Reliable Monzo transaction correlation for notes (must be solved before live execution).

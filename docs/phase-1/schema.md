@@ -1,5 +1,9 @@
 # Increment 1 schema contract
 
+This documents the original import/review schema. Migration 0003 subsequently
+adds merchant review, and migration 0004 adds append-only handling, recon status,
+and membership events; see [Increment 3 / Slice 1](increment-3-slice-1.md).
+
 The executable starting schema is `migrations/0001_initial.sql`; migration 0002
 adds original transaction currency for canonical overlap checks. The production
 runner applies pending migrations transactionally and tests cover fresh/reopened,
