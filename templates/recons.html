@@ -1,7 +1,0 @@
-{% extends "base.html" %}
-{% block content %}
-<h1>Recon workspaces</h1>
-<p>A recon is an explicit selection of purchases, not a rolling export or date cutoff. Creating or archiving one never marks purchases paid.</p>
-<ul>{% for recon in recons %}<li><a href="/recons/{{ recon.id }}">{{ recon.name }}</a> · {{ recon.status }}</li>{% else %}<li>No recons yet. Create one below, then select purchases in Review.</li>{% endfor %}</ul>
-<form method="post" action="/review/stage" class="panel"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="create_recon"><label>Recon name <input name="name" required maxlength="200" placeholder="e.g. 2026-10-31"></label><button>Preview new recon</button></form>
-{% endblock %}

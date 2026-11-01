@@ -226,35 +226,76 @@ pub struct PurchaseEdit {
     pub allow_category: bool,
     pub stage: bool,
 }
-impl Store {
-    pub fn edit_purchase(&mut self, edit: PurchaseEdit) -> Result<()> {
-        self.execution_editable(&[edit.id])?;
-        if !matches!(edit.account.as_str(), "" | "personal" | "joint")
-            || edit.category.len() > 200
-            || edit.description.len() > 4000
+
+impl PurchaseEdit {
+    fn validate(&self) -> Result<()> {
+        if !matches!(self.account.as_str(), "" | "personal" | "joint")
+            || self.category.len() > 200
+            || self.description.len() > 4000
         {
             return Err(Error::Invalid("Invalid purchase details.".into()));
         }
+        Ok(())
+    }
+
+    /// Save within the caller's transaction, preserving unchanged inherited fields.
+    fn save(&self, db: &rusqlite::Connection, row: &DetailRow) -> Result<()> {
+        // Leaving a rule-derived account unchanged keeps its provenance.
+        if row.account != self.account {
+            let account = (!self.account.is_empty()).then_some(&self.account);
+            db.execute(
+                "INSERT INTO review_decisions(purchase_id,version,account) VALUES(?1,?2,?3)",
+                params![row.id, row.version + 1, account],
+            )?;
+        }
+
+        let category = self.category.trim();
+        let description = self.description.trim();
+        let details_changed = row.category != category
+            || row.description != description
+            || self.use_category_default
+            || self.use_description_default;
+        if details_changed {
+            let inherit_category = self.use_category_default
+                || (row.category == category
+                    && !row.category_source.starts_with("purchase override"));
+            let inherit_description = self.use_description_default
+                || (row.description == description
+                    && !row.description_source.starts_with("purchase override"))
+                || description.is_empty();
+            let category = if inherit_category {
+                None
+            } else {
+                crate::review::category_name(db, category, self.allow_category)?
+            };
+            let description = (!inherit_description).then_some(description);
+            db.execute(
+                "INSERT INTO purchase_details(purchase_id,version,category,description) VALUES(?1,?2,?3,?4)",
+                params![row.id, row.details_version + 1, category, description],
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl Store {
+    pub fn edit_purchase(&mut self, edit: PurchaseEdit) -> Result<()> {
+        self.execution_editable(&[edit.id])?;
+        edit.validate()?;
         self.backup()?;
-        self.atomic(|_| {
-            let row=self.detail_rows()?.into_iter().find(|r|r.id==edit.id).ok_or(Error::NotFound)?;
-            if row.signature()!=edit.signature {return Err(Error::Stale);}
-            if row.conflict {return Err(Error::Invalid("Resolve the source conflict first.".into()));}
-            // Leaving a rule-derived account unchanged keeps its provenance.
-            if row.account!=edit.account {
-                self.db.execute("INSERT INTO review_decisions(purchase_id,version,account) VALUES(?1,?2,?3)",params![row.id,row.version+1,if edit.account.is_empty(){None}else{Some(&edit.account)}])?;
+        self.atomic(|store| {
+            let row = store.detail_row(edit.id)?;
+            if row.signature() != edit.signature {
+                return Err(Error::Stale);
             }
-            if row.category!=edit.category.trim() || row.description!=edit.description.trim() || edit.use_category_default || edit.use_description_default {
-                let category=if edit.use_category_default || (row.category==edit.category.trim() && !row.category_source.starts_with("purchase override")) {None}
-                    else {crate::review::category_name(&self.db,&edit.category,edit.allow_category)?};
-                let description=if edit.use_description_default || (row.description==edit.description.trim() && !row.description_source.starts_with("purchase override")) || edit.description.trim().is_empty() {None}
-                    else {Some(edit.description.trim())};
-                self.db.execute("INSERT INTO purchase_details(purchase_id,version,category,description) VALUES(?1,?2,?3,?4)",params![row.id,row.details_version+1,category,description])?;
+            if row.conflict {
+                return Err(Error::Invalid("Resolve the source conflict first.".into()));
             }
+            edit.save(&store.db, &row)?;
             if edit.stage {
-                let row=self.detail_rows()?.into_iter().find(|r|r.id==edit.id).ok_or(Error::NotFound)?;
-                self.validate_staging(&[(row.id,row.signature())],true)?;
-                save_staging(&self.db,&[row],true)?;
+                let row = store.detail_row(edit.id)?;
+                store.validate_staging(&[(row.id, row.signature())], true)?;
+                save_staging(&store.db, &[row], true)?;
             }
             Ok(())
         })

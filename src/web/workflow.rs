@@ -33,7 +33,12 @@ pub(super) fn return_path(value: &str) -> Result<String> {
 #[derive(Template)]
 #[template(path = "merchants.html")]
 struct Merchants {
-    view: ReviewContext,
+    csrf: String,
+    merchant: String,
+    category: String,
+    description: String,
+    categories: Vec<String>,
+    groups: Vec<(String, usize)>,
 }
 pub(super) async fn merchants(
     State(state): State<AppState>,
@@ -45,7 +50,12 @@ pub(super) async fn merchants(
         .work(move |s| Ok((s.review_page(&query)?, s.merchant_default(&query.q)?)))
         .await?;
     render(Merchants {
-        view: review_context(&state, filters, data, defaults),
+        csrf: state.0.csrf.clone(),
+        merchant: filters.q,
+        category: defaults.0,
+        description: defaults.1,
+        categories: data.categories,
+        groups: data.groups,
     })
 }
 #[derive(Template)]
@@ -91,12 +101,11 @@ struct Prepare {
 pub(super) async fn prepare(State(state): State<AppState>) -> Result<Html<String>> {
     let (summary, rows, revision, active, previous) = state
         .work(|s| {
+            let rows = s.detail_rows()?;
+            let summary = QueueSummary::from_rows(&rows, s.unresolved_exception_count()?)?;
             Ok((
-                s.queue_summary()?,
-                s.detail_rows()?
-                    .into_iter()
-                    .filter(|r| r.outstanding())
-                    .collect(),
+                summary,
+                rows.into_iter().filter(|r| r.outstanding()).collect(),
                 s.review_revision()?,
                 s.active_run()?,
                 s.run_ids()?.first().map(|id| s.run(*id)).transpose()?,
@@ -152,13 +161,8 @@ pub(super) async fn start(
     State(state): State<AppState>,
     Form(form): Form<StartForm>,
 ) -> Result<Redirect> {
-    csrf(&state, &form.csrf)?;
-    let permit = state
-        .0
-        .execution
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Invalid("A recon operation is already running.".into()))?;
+    state.check_csrf(&form.csrf)?;
+    let permit = state.execution_permit()?;
     let revision = form.revision;
     let summary = state
         .work(move |s| {
@@ -217,14 +221,6 @@ pub(super) async fn start(
     launch(state, bank, id, permit);
     Ok(Redirect::to(&format!("/runs/{id}")))
 }
-fn csrf(state: &AppState, value: &str) -> Result<()> {
-    if !equal(value, &state.0.csrf) {
-        return Err(Error::Invalid(
-            "Invalid CSRF token. Reload the page.".into(),
-        ));
-    }
-    Ok(())
-}
 fn launch(state: AppState, bank: Monzo, id: i64, permit: tokio::sync::OwnedSemaphorePermit) {
     if let Ok(mut message) = state.0.execution_message.lock() {
         *message = String::new();
@@ -252,13 +248,8 @@ pub(super) async fn resume(
     Path(id): Path<i64>,
     Form(form): Form<TokenForm>,
 ) -> Result<Redirect> {
-    csrf(&state, &form.csrf)?;
-    let permit = state
-        .0
-        .execution
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Invalid("A recon operation is already running.".into()))?;
+    state.check_csrf(&form.csrf)?;
+    let permit = state.execution_permit()?;
     state
         .work(move |s| {
             if s.active_run()? != Some(id) {
@@ -275,18 +266,13 @@ pub(super) async fn note(
     Path((id, operation)): Path<(i64, i64)>,
     Form(form): Form<TokenForm>,
 ) -> Result<Redirect> {
-    csrf(&state, &form.csrf)?;
+    state.check_csrf(&form.csrf)?;
     if form.confirmed.is_none() {
         return Err(Error::Invalid(
             "Confirm the exact Monzo transaction belongs to this deposit.".into(),
         ));
     }
-    let _permit = state
-        .0
-        .execution
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Invalid("A recon operation is already running.".into()))?;
+    let _permit = state.execution_permit()?;
     execution::apply_note(
         state.0.store.clone(),
         &Monzo::new(form.token)?,
@@ -362,12 +348,25 @@ pub(super) async fn edit(
     Query(filters): Query<Filters>,
 ) -> Result<Html<String>> {
     filters.validate()?;
-    let (row,categories,reference,posting,imports)=state.work(move|s| {
-        let row=s.detail_rows()?.into_iter().find(|r|r.id==id).ok_or(Error::NotFound)?;
-        let (reference,posting)=s.db.query_row("SELECT reference,posting_date FROM purchases WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        let imports=s.db.prepare("SELECT DISTINCT i.id,i.original_filename FROM imports i JOIN source_observations o ON o.import_id=i.id WHERE o.purchase_id=?1 ORDER BY i.id")?.query_map([id],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        Ok((row,s.categories()?,reference,posting,imports))
-    }).await?;
+    let (row, categories, reference, posting, imports) = state
+        .work(move |s| {
+            let row = s.detail_row(id)?;
+            let (reference, posting) = s.db.query_row(
+                "SELECT reference,posting_date FROM purchases WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let imports =
+                s.db.prepare(
+                    "SELECT DISTINCT i.id,i.original_filename FROM imports i
+                 JOIN source_observations o ON o.import_id=i.id
+                 WHERE o.purchase_id=?1 ORDER BY i.id",
+                )?
+                .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok((row, s.categories()?, reference, posting, imports))
+        })
+        .await?;
     render(EditPage {
         csrf: state.0.csrf.clone(),
         row,
@@ -396,7 +395,7 @@ pub(super) async fn save(
     Path(id): Path<i64>,
     Form(form): Form<EditForm>,
 ) -> Result<Redirect> {
-    csrf(&state, &form.csrf)?;
+    state.check_csrf(&form.csrf)?;
     let return_to = return_path(&form.return_to)?;
     if !matches!(form.action.as_str(), "save" | "stage") {
         return Err(Error::Invalid("Choose save or stage.".into()));

@@ -197,9 +197,6 @@ impl Filters {
         }
         Ok(())
     }
-    pub fn selected_recon(&self, recon: &crate::recon::ReconInfo) -> bool {
-        self.recon_id == Some(recon.id)
-    }
 }
 fn optional_import<'de, D: serde::Deserializer<'de>>(
     d: D,
@@ -222,7 +219,6 @@ pub struct ReviewPage {
     pub pages: usize,
     pub groups: Vec<(String, usize)>,
     pub categories: Vec<String>,
-    pub recons: Vec<crate::recon::ReconInfo>,
     pub queue: crate::queue::QueueSummary,
     pub imports: Vec<(i64, String)>,
     pub active_run: Option<i64>,
@@ -304,6 +300,14 @@ impl Store {
         self.enrich_staging(&mut rows)?;
         Ok(rows)
     }
+
+    pub fn detail_row(&self, id: i64) -> Result<DetailRow> {
+        self.detail_rows()?
+            .into_iter()
+            .find(|row| row.id == id)
+            .ok_or(Error::NotFound)
+    }
+
     pub fn merchant_default(&self, merchant: &str) -> Result<(String, String)> {
         let key = normalize(merchant);
         let aliases = self.aliases()?;
@@ -332,26 +336,7 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
     pub fn review_page(&self, filter: &Filters) -> Result<ReviewPage> {
-        if !matches!(
-            filter.view.as_str(),
-            "" | "all"
-                | "attention"
-                | "complete"
-                | "ready"
-                | "external"
-                | "excluded"
-                | "unknown"
-                | "staged"
-                | "outstanding"
-                | "history"
-        ) || !matches!(filter.account.as_str(), "" | "unset" | "personal" | "joint")
-            || !matches!(
-                filter.missing.as_str(),
-                "" | "account" | "category" | "description" | "conflict" | "handling" | "recon"
-            )
-        {
-            return Err(Error::Invalid("Invalid review filter.".into()));
-        }
+        filter.validate()?;
         let members:Option<BTreeSet<i64>>=filter.import_id.map(|id|->Result<_>{ Ok(self.db.prepare("SELECT purchase_id FROM source_observations WHERE import_id=?1 AND purchase_id IS NOT NULL")?.query_map([id],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?) }).transpose()?;
         let recon_members = filter
             .recon_id
@@ -415,7 +400,6 @@ impl Store {
             pages,
             groups: groups.into_iter().collect(),
             categories: self.categories()?,
-            recons: self.recons()?,
             queue,
             imports: self.recent_imports()?,
             active_run: self.active_run()?,

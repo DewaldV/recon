@@ -51,6 +51,23 @@ impl AppState {
         format!("http://127.0.0.1:7310/start#{}", self.0.bootstrap)
     }
 
+    fn check_csrf(&self, token: &str) -> Result<()> {
+        if !equal(token, &self.0.csrf) {
+            return Err(Error::Invalid(
+                "Invalid CSRF token. Reload the page.".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn execution_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        self.0
+            .execution
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::Invalid("A recon operation is already running.".into()))
+    }
+
     async fn work<T: Send + 'static>(
         &self,
         f: impl FnOnce(&mut Store) -> Result<T> + Send + 'static,
@@ -263,11 +280,7 @@ async fn read_upload(state: &AppState, mut multipart: Multipart) -> Result<(Stri
             _ => return Err(Error::Invalid("Unexpected upload form field.".into())),
         }
     }
-    if !csrf.is_some_and(|value| equal(&value, &state.0.csrf)) {
-        return Err(Error::Invalid(
-            "Invalid CSRF token. Reload the page.".into(),
-        ));
-    }
+    state.check_csrf(csrf.as_deref().unwrap_or_default())?;
     let (filename, bytes) = file.ok_or_else(|| Error::Invalid("Choose a CSV to import.".into()))?;
     Ok((filename, bytes.to_vec()))
 }
@@ -315,21 +328,17 @@ async fn decide(
     headers: HeaderMap,
     Form(form): Form<DecisionForm>,
 ) -> Result<Response> {
-    if !equal(&form.csrf, &state.0.csrf) {
-        return Err(Error::Invalid(
-            "Invalid CSRF token. Reload the page.".into(),
-        ));
-    }
+    state.check_csrf(&form.csrf)?;
     let query = filters.clone();
-    let (data, defaults) = state
+    let data = state
         .work(move |s| {
             // Validate the return filters before committing any decision.
             s.review_page(&query)?;
             s.decide(id, form.version, &form.account)?;
-            Ok((s.review_page(&query)?, s.merchant_default(&query.q)?))
+            s.review_page(&query)
         })
         .await?;
-    let view = review_context(&state, filters, data, defaults);
+    let view = review_context(&state, filters, data);
     if is_htmx(&headers) {
         // Refresh counts, filter membership, pagination, and bulk versions together.
         Ok(render(ReviewWorkspace { view })?.into_response())
@@ -385,8 +394,6 @@ struct ReviewContext {
     csrf: String,
     data: crate::review::ReviewPage,
     filters: crate::review::Filters,
-    default_category: String,
-    default_description: String,
     previous: String,
     next: String,
     query: String,
@@ -403,10 +410,8 @@ async fn review(
         filters.view = "attention".into();
     }
     let query = filters.clone();
-    let (data, defaults) = state
-        .work(move |s| Ok((s.review_page(&query)?, s.merchant_default(&query.q)?)))
-        .await?;
-    let mut view = review_context(&state, filters, data, defaults);
+    let data = state.work(move |s| s.review_page(&query)).await?;
+    let mut view = review_context(&state, filters, data);
     if let Some(id) = view.filters.import_notice {
         view.import_notice = Some(state.work(move |s| s.summary(id)).await?);
     }
@@ -448,14 +453,11 @@ fn review_context(
     state: &AppState,
     filters: crate::review::Filters,
     data: crate::review::ReviewPage,
-    (default_category, default_description): (String, String),
 ) -> ReviewContext {
     let previous = review_link(&filters, data.page.saturating_sub(1).max(1));
     let next = review_link(&filters, data.page + 1);
-    let query = review_link(&filters, data.page)
-        .trim_start_matches("/review?")
-        .to_owned();
     let return_to = review_link(&filters, data.page);
+    let query = return_to.trim_start_matches("/review?").to_owned();
     let active_run = data.active_run;
     ReviewContext {
         csrf: state.0.csrf.clone(),
@@ -463,28 +465,18 @@ fn review_context(
         filters,
         previous,
         next,
-        default_category,
-        default_description,
         query,
         return_to,
         active_run,
         import_notice: None,
     }
 }
-fn check_csrf(state: &AppState, form: &std::collections::HashMap<String, String>) -> Result<()> {
-    if !form.get("csrf").is_some_and(|v| equal(v, &state.0.csrf)) {
-        return Err(Error::Invalid(
-            "Invalid CSRF token. Reload the page.".into(),
-        ));
-    }
-    Ok(())
-}
 async fn stage_change(
     State(state): State<AppState>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<Redirect> {
     use crate::review::Change;
-    check_csrf(&state, &form)?;
+    state.check_csrf(form.get("csrf").map(String::as_str).unwrap_or_default())?;
     let value = |key: &str| form.get(key).cloned().unwrap_or_default();
     let mut rows = Vec::new();
     let mut signatures = Vec::new();
@@ -743,7 +735,7 @@ async fn commit_change(
     Path(token): Path<String>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<Redirect> {
-    check_csrf(&state, &form)?;
+    state.check_csrf(form.get("csrf").map(String::as_str).unwrap_or_default())?;
     let mut selected = std::collections::BTreeSet::new();
     for key in form.keys().filter_map(|k| k.strip_prefix("record_")) {
         selected.insert(
