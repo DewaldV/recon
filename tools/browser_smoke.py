@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -257,7 +258,14 @@ def run():
             wait("return document.body.textContent.includes('Confirm source exception disposition')")
             click("form button")
             navigate("http://127.0.0.1:7310/run")
+            assert execute("return document.body.textContent.includes('Save the account and pot IDs') && !document.querySelector('input[name=token]')")
+            navigate("http://127.0.0.1:7310/settings")
+            execute("document.querySelector('input[name=personal_account]').value = 'acc_smoke_personal'; document.querySelector('input[name=personal_pot]').value = 'pot_smoke_personal'; document.querySelector('input[name=joint_account]').value = 'acc_smoke_joint'; document.querySelector('input[name=joint_pot]').value = 'pot_smoke_joint'; return true")
+            click("form button")
+            wait("return document.body.textContent.includes('Destination settings saved.')")
+            navigate("http://127.0.0.1:7310/run")
             assert execute("return !!document.querySelector('input[name=token]') && document.body.textContent.includes('Confirm and run recon')")
+            assert execute("return !document.querySelector('input[name=personal_account]') && !document.querySelector('input[name=joint_account]')")
             # Never submit a token or invoke a financial endpoint in browser checks.
             stop(app)
             app, url = start_app(data)
@@ -265,10 +273,27 @@ def run():
             wait("return !!document.querySelector('input[type=file]')")
             navigate("http://127.0.0.1:7310/run")
             assert execute("return document.body.textContent.includes('£12.34')")
+            navigate("http://127.0.0.1:7310/settings")
+            assert execute("return document.querySelector('input[name=personal_account]').value === 'acc_smoke_personal' && document.querySelector('input[name=joint_pot]').value === 'pot_smoke_joint' && !document.querySelector('input[name=token]')")
             navigate("http://127.0.0.1:7310/review?view=staged")
             wait("return document.body.textContent.includes('1 distinct purchases')")
             assert execute("return !document.querySelector('#review-1') && !!document.querySelector('#review-2')")
-            print("Browser smoke passed: import, draft/focus preservation, merchant review, account rules, bulk and individual staging, external handling, source dispositions, run preview, and restart.")
+            # Seed a synthetic deposits-only run to verify its recovery UI without
+            # sending any requests to Monzo.
+            stop(app)
+            with sqlite3.connect(Path(data) / "recon.sqlite3") as db:
+                db.execute("INSERT INTO recon_runs(id,status) VALUES(1,'active')")
+                db.execute("""INSERT INTO run_operations(id,run_id,purchase_id,allocation,account_id,pot_id,amount_pence,note,merchant,signature,snapshot,dedupe_id)
+                    VALUES(1,1,2,'personal','acc_smoke_personal','pot_smoke_personal',1234,'Synthetic pending note','Synthetic shop','synthetic','{}','synthetic_key')""")
+                db.execute("INSERT INTO operation_events(operation_id,deposit,note,message) VALUES(1,'confirmed','pending','Synthetic legacy deposit')")
+            app, url = start_app(data)
+            navigate(url)
+            wait("return !!document.querySelector('input[type=file]')")
+            navigate("http://127.0.0.1:7310/runs/1")
+            assert execute("return document.body.textContent.includes('Resume recon') && document.body.textContent.includes('Synthetic pending note')")
+            assert execute("return document.querySelectorAll('input[name=token]').length === 1 && !document.querySelector('input[name=transaction]') && !document.querySelector('input[name=confirmed]')")
+            assert execute("return document.querySelector('form[action=\"/runs/1/resume\"] input[name=csrf]').value.length > 0")
+            print("Browser smoke passed: import, draft/focus preservation, merchant review, account rules, bulk and individual staging, external handling, source dispositions, run preview, restart, and token-only automatic-note recovery UI.")
         finally:
             if session:
                 try:

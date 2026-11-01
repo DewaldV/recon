@@ -16,6 +16,20 @@ struct Args {
     /// Write a verified SQLite snapshot and exit, with the app otherwise stopped.
     #[arg(long)]
     backup: bool,
+    /// Set a permanent inclusive posting-date start boundary and exit (app must be stopped).
+    #[arg(
+        long,
+        value_name = "YYYY-MM-DD",
+        requires = "cutover_reason",
+        conflicts_with = "backup"
+    )]
+    start_date: Option<String>,
+    /// Evidence that earlier purchases belong to historical reconciliation.
+    #[arg(long, requires = "start_date")]
+    cutover_reason: Option<String>,
+    /// Retry validated CSV repairs for an archived import, then exit (app stopped).
+    #[arg(long, value_name = "IMPORT_ID", conflicts_with_all = ["backup", "start_date"])]
+    repair_import: Option<i64>,
 }
 
 #[tokio::main]
@@ -29,9 +43,32 @@ async fn main() {
 async fn run() -> recon::Result<()> {
     let args = Args::parse();
     let directory = config::data_directory(args.data_dir)?;
-    let store = tokio::task::spawn_blocking(move || Store::open(&directory))
+    let mut store = tokio::task::spawn_blocking(move || Store::open(&directory))
         .await
         .map_err(|_| recon::Error::Worker)??;
+    if let Some(id) = args.repair_import {
+        let result = tokio::task::spawn_blocking(move || store.repair_import(id))
+            .await
+            .map_err(|_| recon::Error::Worker)??;
+        if let Some(path) = result.backup {
+            println!("Verified backup: {}", path.display());
+        }
+        println!("Recovered {} quarantined source rows.", result.repaired);
+        return Ok(());
+    }
+    if let Some(date) = args.start_date {
+        let reason = args.cutover_reason.expect("clap requires cutover evidence");
+        let result = tokio::task::spawn_blocking(move || store.set_cutover(&date, &reason))
+            .await
+            .map_err(|_| recon::Error::Worker)??;
+        println!(
+            "Verified backup: {}\nExcluded {} pre-cutover purchases; resolved {} pre-cutover source exceptions.",
+            result.backup.display(),
+            result.excluded,
+            result.resolved_exceptions
+        );
+        return Ok(());
+    }
     if args.backup {
         let path = tokio::task::spawn_blocking(move || store.backup())
             .await

@@ -4,6 +4,11 @@
 <p>{{ summary.total }} source records accounted for. Identical uploads reuse this import.</p>
 <dl class="counts">{% for (kind,count) in summary.counts %}<div><dt>{{ kind }}</dt><dd>{{ count }}</dd></div>{% endfor %}</dl>
 <p><a class="button" href="/review">Review outstanding purchases</a> · <a href="/review?view=all&amp;import_id={{ summary.id }}">Inspect this import</a></p>
+{% if !summary.repairs.is_empty() %}
+<h2>{{ summary.repairs.len() }} automatic CSV repairs</h2>
+<p>Extra unquoted columns were folded into the merchant name using the monzo-cli convention. Original source rows are retained. Repaired purchases still require review and staging.</p>
+{% for repair in summary.repairs %}<details class="panel"><summary>Record {{ repair.record_number }} · {{ repair.method }}</summary><p>Result: <a href="/imports/{{ repair.replacement_import }}">import #{{ repair.replacement_import }}</a>, record {{ repair.replacement_record }}.</p><p>Original source (excerpt):</p><pre class="source-excerpt">{{ repair.source_text }}</pre><p>Parsed fields:</p><pre class="source-excerpt">{{ repair.normalized_record }}</pre></details>{% endfor %}
+{% endif %}
 <h2>Exceptions and non-purchases</h2>
 {% for exception in summary.exceptions %}
 <details class="panel"><summary>Record {{ exception.record_number }} · {{ exception.disposition }}{% if !exception.resolution.is_empty() %} · disposition recorded{% endif %}</summary>

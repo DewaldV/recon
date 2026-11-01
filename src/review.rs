@@ -338,7 +338,7 @@ impl Store {
     }
     pub fn review_page(&self, filter: &Filters) -> Result<ReviewPage> {
         filter.validate()?;
-        let members:Option<BTreeSet<i64>>=filter.import_id.map(|id|->Result<_>{ Ok(self.db.prepare("SELECT purchase_id FROM source_observations WHERE import_id=?1 AND purchase_id IS NOT NULL")?.query_map([id],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?) }).transpose()?;
+        let members:Option<BTreeSet<i64>>=filter.import_id.map(|id|->Result<_>{ Ok(self.db.prepare("SELECT purchase_id FROM source_observations WHERE import_id=?1 AND purchase_id IS NOT NULL UNION SELECT n.purchase_id FROM observation_repairs r JOIN source_observations o ON o.id=r.observation_id JOIN source_observations n ON n.id=r.replacement_observation_id WHERE o.import_id=?1 AND n.purchase_id IS NOT NULL")?.query_map([id],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?) }).transpose()?;
         let recon_members = filter
             .recon_id
             .map(|id| self.recon_members(id))

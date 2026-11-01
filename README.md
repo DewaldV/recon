@@ -12,14 +12,19 @@ The current flow is **Import → Review → Stage → Run**:
 - Searchable merchant/card rule selection, prefilled rule editing, and account-change/staging impact previews.
 - Individual Save and stage, bulk review, version-checked staging, and explicit external-funding/exclusion decisions.
 - Reference-matched historical CSV migration with provenance and preservation of existing decisions.
+- Optional permanent posting-date cutover for keeping earlier reconciliation in historical spreadsheets.
+- Audited monzo-cli-compatible extra-column CSV repair, including recovery of previously quarantined rows on reupload.
 - One immutable run at a time, temporary Monzo tokens, persisted deposit results and deduplication keys, and restart/resume.
-- Separate deposit/note progress. Notes require a user-confirmed Monzo transaction ID; automatic correlation is unresolved.
+- Persistent Personal/Joint account and pot IDs on Configuration; enter only a fresh token when running or resuming.
+- Automatic notes immediately after each deposit, with persisted transaction mappings and separate deposit/note recovery progress.
 
 See the [current workflow guide](docs/single-queue-workflow.md). Old named
-workspaces are read-only history. Source dispositions are implemented; creating
-repaired purchases, pending-to-billed linking, and export/handoff are still deferred.
-Verification uses synthetic data and mocked Monzo HTTP responses; live Monzo and
-real-data acceptance have not been performed.
+workspaces are read-only history. Source dispositions and recognised extra-column
+repairs are implemented; general source repair, pending-to-billed linking, and
+export/handoff are still deferred.
+Automated verification uses synthetic data and mocked Monzo HTTP responses.
+The user has completed a live reconciliation, including automatic recovery of its
+pending notes. The test suite also covers immediate deposit-and-note execution.
 
 ## Development
 

@@ -96,20 +96,24 @@ merchant+card rule, merchant rule, then missing. Clearing a purchase choice retu
 to rule fallback. All outstanding blockers and source exceptions must be resolved
 before starting. Save and stage is one atomic transaction.
 
-### D028 — Temporary-token execution and manual note matching (agreed/default)
+### D028 — Temporary-token execution and automatic notes (updated)
 
 Supersedes `pass-cli` injection in D013. The user supplies a temporary token through
-the local form for each execution/resume/note attempt. The backend holds it only
+the local form for each execution/resume attempt. The backend holds it only
 in memory; never persist or return it. Immutable instructions and keys precede
 remote requests, confirmed deposits are skipped on resume, and uncertain retries
 retain their original identity. Deposit confirmation removes a purchase from the
 outstanding queue, but a run completes only when its notes also complete.
 
-Monzo deposits return pot state without a transaction ID. The current implementation
-requires an explicit user-confirmed transaction match and validates account scope,
-currency and amount. It never chooses a transaction based on equal amount/time.
-Reserve the mapping before annotation and reuse it after failure. Automatic
-correlation and live API verification remain unresolved.
+Applying the note is part of execution, immediately after each deposit. This
+supersedes the initial manual transaction-ID forms. Use a returned transaction ID
+when present; the documented pot response otherwise requires automatic lookup.
+Match account-scoped pot debits by currency, amount, submission window and existing
+operation markers, excluding occupied mappings and unrelated notes. Recover older
+deposits-only runs in complete chronological groups, retaining ambiguous matches
+as pending. Reserve mappings before annotation and reuse them on resume. Notes-only
+recovery skips deposits and funds checks. The user has confirmed successful live
+completion of the existing run using automatic note recovery.
 
 ### D029 — Migration, source dispositions and restore guard (implementation default)
 
@@ -127,6 +131,5 @@ and old watermark still requires external reconciliation. See the restore guide.
 ## Remaining open decisions
 
 - Merchant pattern/rule language and historical suggestion thresholds.
-- Automatic Monzo transaction correlation for notes and live validation of explicit matching.
 - Refund/fee financial treatment and any future withdrawal support.
 - Any Proton acquisition integration or persistent OAuth workflow.

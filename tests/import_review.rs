@@ -183,7 +183,7 @@ fn classification_and_validation_are_explicit() {
         ("DBIT,PR,BILLED", "DBIT,FE,BILLED", "fee"),
         ("DBIT,PR,BILLED", "CRDT,PY,BILLED", "payment"),
         ("BILLED,GBP", "BILLED,INVALID", "unsupported"),
-        ("SYNTHETIC SHOP", "SYNTHETIC, SHOP", "malformed"),
+        ("SYNTHETIC SHOP", "SYNTHETIC, SHOP", "purchase"),
     ] {
         let observations = importer::parse(&changed(from, to)).unwrap();
         assert_eq!(observations[0].disposition, expected, "{from} → {to}");

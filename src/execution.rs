@@ -3,7 +3,7 @@ use crate::{Error, Result, queue::QueueSummary, storage::Store};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     sync::{Arc, Mutex},
 };
@@ -50,6 +50,7 @@ pub struct Operation {
     pub note_status: String,
     pub message: String,
     pub started_at: String,
+    pub confirmed_at: String,
     pub mapped_transaction: String,
 }
 impl Operation {
@@ -70,9 +71,11 @@ pub enum BankFailure {
     Unauthorized,
     RateLimited,
     Uncertain,
+    Preflight(String),
+    NoteMatchPending,
 }
 impl BankFailure {
-    pub fn message(&self) -> &'static str {
+    pub fn message(&self) -> &str {
         match self {
             Self::Rejected => {
                 "Monzo rejected this request. Check the destination and funds before resuming."
@@ -81,6 +84,10 @@ impl BankFailure {
             Self::RateLimited => "Monzo rate limit reached. Resume later.",
             Self::Uncertain => {
                 "The remote outcome is unknown. Resume reuses the same deduplication key."
+            }
+            Self::Preflight(message) => message,
+            Self::NoteMatchPending => {
+                "Deposit confirmed; waiting for Monzo to expose a unique matching pot transaction. Resume recon to retry the note. Confirmed deposits will not be repeated."
             }
         }
     }
@@ -93,15 +100,13 @@ pub trait Bank: Send + Sync {
     fn deposit(
         &self,
         operation: &Operation,
-    ) -> impl Future<Output = std::result::Result<(), BankFailure>> + Send;
-    fn validate_note(
+    ) -> impl Future<Output = std::result::Result<Option<String>, BankFailure>> + Send;
+    fn find_transactions(
         &self,
-        _operation: &Operation,
-        _transaction_id: &str,
-    ) -> impl Future<Output = std::result::Result<(), BankFailure>> + Send {
-        async { Ok(()) }
-    }
-    /// An explicit, user-confirmed transaction mapping is required: the deposit response has no transaction ID.
+        operations: &[Operation],
+        used_transactions: &BTreeSet<String>,
+    ) -> impl Future<Output = std::result::Result<Vec<(i64, String)>, BankFailure>> + Send;
+    /// The mapping is persisted before submitting a note, and reused on retries.
     fn annotate(
         &self,
         operation: &Operation,
@@ -191,11 +196,11 @@ impl Store {
             .optional()?
             .ok_or(Error::NotFound)?;
         let operations = self.db.prepare("SELECT id,run_id,purchase_id,allocation,account_id,pot_id,amount_pence,note,merchant,dedupe_id,deposit,note_status,message,
-            (SELECT min(created_at) FROM operation_events e WHERE e.operation_id=current_operations.id),coalesce((SELECT transaction_id FROM note_mappings m WHERE m.operation_id=current_operations.id),'')
+            coalesce((SELECT min(created_at) FROM operation_events e WHERE e.operation_id=current_operations.id AND e.deposit='in_flight'),(SELECT min(created_at) FROM operation_events e WHERE e.operation_id=current_operations.id)),coalesce((SELECT transaction_id FROM note_mappings m WHERE m.operation_id=current_operations.id),''),coalesce((SELECT min(created_at) FROM operation_events e WHERE e.operation_id=current_operations.id AND e.deposit='confirmed'),'')
             FROM current_operations WHERE run_id=?1 ORDER BY id")?.query_map([id], |r| Ok(Operation {
                 id:r.get(0)?,run_id:r.get(1)?,purchase_id:r.get(2)?,destination:Destination {allocation:r.get(3)?,account_id:r.get(4)?,pot_id:r.get(5)?},
                 amount_pence:r.get(6)?,note:r.get(7)?,merchant:r.get(8)?,dedupe_id:r.get(9)?,deposit:r.get(10)?,note_status:r.get(11)?,message:r.get(12)?,
-                started_at:r.get(13)?,mapped_transaction:r.get(14)?,
+                started_at:r.get(13)?,mapped_transaction:r.get(14)?,confirmed_at:r.get(15)?,
             }))?.collect::<rusqlite::Result<_>>()?;
         Ok(Run {
             id,
@@ -329,6 +334,8 @@ pub async fn execute<B: Bank>(store: Arc<Mutex<Store>>, bank: &B, id: i64) -> Re
         s.run(id)
     })
     .await?;
+    // Finish any notes from an interrupted or older deposits-only run first.
+    complete_pending_notes(store.clone(), bank, id).await?;
     let mut totals: BTreeMap<String, (Destination, i64)> = BTreeMap::new();
     for op in run.operations.iter().filter(|o| o.deposit != "confirmed") {
         let total = totals
@@ -343,15 +350,16 @@ pub async fn execute<B: Bank>(store: Arc<Mutex<Store>>, bank: &B, id: i64) -> Re
                 .ok_or_else(|| Error::Invalid("Run total overflow.".into()))?;
         }
     }
-    if let Err(error) = bank
-        .preflight(&totals.into_values().collect::<Vec<_>>())
-        .await
+    if !totals.is_empty()
+        && let Err(error) = bank
+            .preflight(&totals.into_values().collect::<Vec<_>>())
+            .await
     {
         if let Some(op) = run.operations.iter().find(|o| o.deposit != "confirmed") {
             let op = op.clone();
-            let message = error.message();
+            let message = error.message().to_owned();
             storage(store.clone(), move |s| {
-                s.record_operation(op.id, &op.deposit, "pending", message, None)?;
+                s.record_operation(op.id, &op.deposit, "pending", &message, None)?;
                 s.write_execution_guard()
             })
             .await?;
@@ -370,18 +378,27 @@ pub async fn execute<B: Bank>(store: Arc<Mutex<Store>>, bank: &B, id: i64) -> Re
             s.write_execution_guard()
         }).await?;
         match bank.deposit(op).await {
-            Ok(()) => {
+            Ok(transaction) => {
                 storage(store.clone(), move |s| {
                     s.record_operation(
                         op_id,
                         "confirmed",
                         "pending",
-                        "Deposit confirmed; match its Monzo transaction to apply the note",
+                        "Deposit confirmed; applying note automatically",
                         None,
                     )?;
                     s.write_execution_guard()
                 })
-                .await?
+                .await?;
+                if let Some(transaction) = transaction {
+                    storage(store.clone(), move |s| {
+                        s.atomic(|s| reserve_note_mapping(s, op_id, &transaction))?;
+                        s.write_execution_guard()
+                    })
+                    .await?;
+                }
+                // Complete the note before moving on to another deposit.
+                complete_pending_notes(store.clone(), bank, id).await?;
             }
             Err(error) => {
                 let status = if matches!(error, BankFailure::Uncertain)
@@ -391,75 +408,155 @@ pub async fn execute<B: Bank>(store: Arc<Mutex<Store>>, bank: &B, id: i64) -> Re
                 } else {
                     "failed"
                 };
-                let message = error.message();
+                let message = error.message().to_owned();
+                let recorded_message = message.clone();
                 storage(store.clone(), move |s| {
-                    s.record_operation(op_id, status, "pending", message, None)?;
+                    s.record_operation(op_id, status, "pending", &recorded_message, None)?;
                     s.write_execution_guard()
                 })
                 .await?;
-                return Err(Error::Invalid(message.into()));
+                return Err(Error::Invalid(message));
             }
         }
     }
     storage(store, move |s| s.finish_run(id)).await
 }
 
-pub async fn apply_note<B: Bank>(
+fn reserve_note_mapping(store: &Store, operation_id: i64, transaction: &str) -> Result<()> {
+    if !valid_id(transaction, "tx_") {
+        return Err(Error::Invalid(
+            "Monzo returned an invalid transaction ID.".into(),
+        ));
+    }
+    let previous: Option<String> = store
+        .db
+        .query_row(
+            "SELECT transaction_id FROM note_mappings WHERE operation_id=?1",
+            [operation_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if previous.as_deref().is_some_and(|id| id != transaction) {
+        return Err(Error::Invalid(
+            "The recorded transaction mapping changed; the existing mapping must be reused.".into(),
+        ));
+    }
+    if store.db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM note_mappings WHERE transaction_id=?1 AND operation_id!=?2)",
+        params![transaction, operation_id],
+        |r| r.get::<_, bool>(0),
+    )? {
+        return Err(Error::Invalid(
+            "Monzo transaction is already assigned to another recon operation.".into(),
+        ));
+    }
+    if previous.is_none() {
+        store.db.execute(
+            "INSERT INTO note_mappings(operation_id,transaction_id) VALUES(?1,?2)",
+            params![operation_id, transaction],
+        )?;
+        store.record_operation(
+            operation_id,
+            "confirmed",
+            "pending",
+            "Transaction matched automatically; note ready to apply",
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+async fn complete_pending_notes<B: Bank>(
     store: Arc<Mutex<Store>>,
     bank: &B,
     run_id: i64,
-    operation_id: i64,
-    transaction: String,
 ) -> Result<()> {
-    if !valid_id(&transaction, "tx_") {
-        return Err(Error::Invalid(
-            "Provide the confirmed Monzo transaction ID.".into(),
-        ));
-    }
-    let id = transaction.clone();
-    let operation=storage(store.clone(),move|s| {
+    let (pending, used) = storage(store.clone(), move |s| {
         s.verify_execution_guard()?;
-        let op=s.run(run_id)?.operations.into_iter().find(|o|o.id==operation_id).ok_or(Error::NotFound)?;
-        if op.deposit!="confirmed" || op.note_status=="complete" {return Err(Error::Invalid("Only confirmed deposits with pending notes can be annotated.".into()));}
-        let previous:Option<String>=s.db.query_row("SELECT transaction_id FROM note_mappings WHERE operation_id=?1",[operation_id],|r|r.get(0)).optional()?;
-        if previous.as_ref().is_some_and(|previous|previous!=&id) {return Err(Error::Invalid("Retry the original transaction mapping; a note submission may already have succeeded.".into()));}
-        if s.db.query_row("SELECT EXISTS(SELECT 1 FROM note_mappings WHERE transaction_id=?1 AND operation_id!=?2)",params![id,operation_id],|r|r.get::<_,bool>(0))? {return Err(Error::Invalid("That transaction is already assigned to a purchase.".into()));}
-        Ok(op)
-    }).await?;
-    bank.validate_note(&operation, &transaction)
-        .await
-        .map_err(|e| Error::Invalid(e.message().into()))?;
-    let id = transaction.clone();
-    storage(store.clone(),move|s| {
-        s.atomic(|s| {
-            s.db.execute("INSERT INTO note_mappings(operation_id,transaction_id) VALUES(?1,?2) ON CONFLICT(operation_id) DO NOTHING",params![operation_id,id])?;
-            let mapped:String=s.db.query_row("SELECT transaction_id FROM note_mappings WHERE operation_id=?1",[operation_id],|r|r.get(0))?;
-            if mapped!=id {return Err(Error::Stale);}
-            s.record_operation(operation_id,"confirmed","pending","Explicit transaction mapping reserved for note submission",None)
-        })?;
-        s.write_execution_guard()
-    }).await?;
-    if let Err(error) = bank.annotate(&operation, &transaction).await {
-        let message = error.message();
+        let pending: Vec<_> = s
+            .run(run_id)?
+            .operations
+            .into_iter()
+            .filter(|o| o.deposit == "confirmed" && o.note_status != "complete")
+            .collect();
+        let used: BTreeSet<String> =
+            s.db.prepare("SELECT transaction_id FROM note_mappings")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+        Ok((pending, used))
+    })
+    .await?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let unmatched: Vec<_> = pending
+        .iter()
+        .filter(|o| o.mapped_transaction.is_empty())
+        .cloned()
+        .collect();
+    if !unmatched.is_empty() {
+        let mappings = match bank.find_transactions(&unmatched, &used).await {
+            Ok(mappings) => mappings,
+            Err(error) => return note_failure(store, unmatched[0].id, error).await,
+        };
+        let expected: BTreeSet<_> = unmatched.iter().map(|o| o.id).collect();
+        if mappings.len() != expected.len()
+            || mappings.iter().map(|m| m.0).collect::<BTreeSet<_>>() != expected
+        {
+            return note_failure(store, unmatched[0].id, BankFailure::NoteMatchPending).await;
+        }
         storage(store.clone(), move |s| {
-            s.record_operation(operation_id, "confirmed", "pending", message, None)?;
+            s.atomic(|s| {
+                for (operation, transaction) in mappings {
+                    reserve_note_mapping(s, operation, &transaction)?;
+                }
+                Ok(())
+            })?;
             s.write_execution_guard()
         })
         .await?;
-        return Err(Error::Invalid(message.into()));
     }
-    storage(store, move |s| {
-        s.atomic(|s| {
+    let operations = storage(store.clone(), move |s| Ok(s.run(run_id)?.operations)).await?;
+    for op in operations
+        .iter()
+        .filter(|o| o.deposit == "confirmed" && o.note_status != "complete")
+    {
+        if let Err(error) = bank.annotate(op, &op.mapped_transaction).await {
+            return note_failure(store, op.id, error).await;
+        }
+        let operation_id = op.id;
+        let transaction = op.mapped_transaction.clone();
+        storage(store.clone(), move |s| {
+            s.verify_execution_guard()?;
             s.record_operation(
                 operation_id,
                 "confirmed",
                 "complete",
-                "Note applied to explicitly confirmed transaction",
+                "Note applied automatically",
                 Some(&transaction),
             )?;
-            s.finish_run(run_id)
-        })?;
+            s.write_execution_guard()
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+async fn note_failure(
+    store: Arc<Mutex<Store>>,
+    operation_id: i64,
+    error: BankFailure,
+) -> Result<()> {
+    let message = match error {
+        BankFailure::Uncertain => "Deposit confirmed; the note lookup or update could not be confirmed. Resume recon to retry the note using any recorded mapping.".to_owned(),
+        BankFailure::Rejected => "Deposit confirmed; Monzo rejected the note lookup or update. Resume recon to retry the pending note.".to_owned(),
+        _ => error.message().to_owned(),
+    };
+    let saved = message.clone();
+    storage(store, move |s| {
+        s.record_operation(operation_id, "confirmed", "pending", &saved, None)?;
         s.write_execution_guard()
     })
-    .await
+    .await?;
+    Err(Error::Invalid(message))
 }

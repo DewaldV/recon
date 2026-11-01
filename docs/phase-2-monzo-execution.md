@@ -1,10 +1,11 @@
 # Phase 2: Safe Monzo execution
 
 > Current implementation: immutable single-queue runs, temporary token entry,
-> preflight, stable deposit keys, persisted recovery, and explicit transaction
-> matching for notes are implemented and covered by synthetic/mock tests. This
-> document retains the original work packages; automatic correlation, exports,
-> automated recovery repair and live acceptance remain outstanding. See the
+> preflight, stable deposit keys, persisted recovery, and automatic transaction
+> matching/annotation are implemented and covered by synthetic/mock tests. The
+> user has completed live deposits and automatic recovery of pending notes. This
+> document retains the original work packages; exports and automated stale-ledger
+> repair remain outstanding. See the
 > [current guide](single-queue-workflow.md) and D026–D029.
 
 ## Outcome
@@ -54,8 +55,8 @@ safe recovery. Keep one deposit and descriptive note per purchase.
 - Establish a reliable way to correlate a deposit with its Monzo transaction for
   notes. The deposit response returns pot state, not a transaction ID. Amount and
   a one-minute time window alone are insufficient for repeated equal deposits.
-- Persist candidate evidence/transaction IDs and stop for ambiguity rather than
-  annotating an unrelated transaction. Keep manual resolution available.
+- Persist transaction IDs before annotation and leave ambiguous matches pending
+  for automatic retry/resume. No per-transaction ID entry or confirmation is required.
 - Retry safe read/note operations with bounded backoff. Use the persistent key for
   any permitted deposit retry. Present explicit uncertain/blocked states.
 - Optionally annotate confirmed transactions with an application operation ID;

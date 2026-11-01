@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Configuration</h1>
+<p>Save the source account and credit-card pot IDs for each allocation. These destinations are stored locally and used for future recons.</p>
+{% if saved %}<p class="notice" role="status">Destination settings saved.</p>{% endif %}
+<form method="post" action="/settings" class="panel" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ settings.version }}">
+  <fieldset><legend>Personal</legend>
+    <label>Source account ID <input name="personal_account" value="{{ settings.personal_account }}" placeholder="acc_…" maxlength="99" spellcheck="false"></label>
+    <label>Credit-card pot ID <input name="personal_pot" value="{{ settings.personal_pot }}" placeholder="pot_…" maxlength="99" spellcheck="false"></label>
+  </fieldset>
+  <fieldset><legend>Joint</legend>
+    <label>Source account ID <input name="joint_account" value="{{ settings.joint_account }}" placeholder="acc_…" maxlength="99" spellcheck="false"></label>
+    <label>Credit-card pot ID <input name="joint_pot" value="{{ settings.joint_pot }}" placeholder="pot_…" maxlength="99" spellcheck="false"></label>
+  </fieldset>
+  <p class="muted">Leave both fields empty for an allocation you do not use. Each configured allocation needs both IDs. Monzo verifies the destinations before execution.</p>
+  <p>Provide a temporary access token on the run or resume screen each time. Tokens are never saved in configuration. Changes here apply to future runs; an existing run keeps its recorded destinations.</p>
+  <button>Save configuration</button>
+</form>
+<a href="/run">Continue to next recon</a>
+{% endblock %}

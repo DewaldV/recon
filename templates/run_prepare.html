@@ -7,15 +7,17 @@
 <p>One run includes every staged outstanding purchase, grouped by account. Filters do not change this selection.</p>
 <div class="summary-grid"><div class="panel metric"><span>Personal</span><strong>£{{ summary.personal_amount() }}</strong><small>{{ summary.personal_count }} purchases</small></div><div class="panel metric"><span>Joint</span><strong>£{{ summary.joint_amount() }}</strong><small>{{ summary.joint_count }} purchases</small></div></div>
 {% if summary.runnable() %}
+{% if destinations_ready %}
 <form method="post" action="/runs/start" class="panel" autocomplete="off">
   <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ revision }}">
-  <h2>Destinations</h2><p>Monzo verifies the account type, pot ownership, GBP currency, and available funds before starting.</p>
-  {% if summary.personal_count > 0 %}<fieldset><legend>Personal · £{{ summary.personal_amount() }}</legend><label>Source account ID <input name="personal_account" value="{{ personal_account }}" placeholder="acc_…" required></label><label>Credit-card pot ID <input name="personal_pot" value="{{ personal_pot }}" placeholder="pot_…" required></label></fieldset>{% endif %}
-  {% if summary.joint_count > 0 %}<fieldset><legend>Joint · £{{ summary.joint_amount() }}</legend><label>Source account ID <input name="joint_account" value="{{ joint_account }}" placeholder="acc_…" required></label><label>Credit-card pot ID <input name="joint_pot" value="{{ joint_pot }}" placeholder="pot_…" required></label></fieldset>{% endif %}
+   <h2>Saved destinations</h2><p><a href="/settings">Change configuration</a>. Monzo verifies the account type, pot ownership, GBP currency, and available funds before starting.</p>
+   {% if summary.personal_count > 0 %}<fieldset><legend>Personal · £{{ summary.personal_amount() }}</legend><p>Source account: <code>{{ settings.personal_account }}</code><br>Credit-card pot: <code>{{ settings.personal_pot }}</code></p></fieldset>{% endif %}
+   {% if summary.joint_count > 0 %}<fieldset><legend>Joint · £{{ summary.joint_amount() }}</legend><p>Source account: <code>{{ settings.joint_account }}</code><br>Credit-card pot: <code>{{ settings.joint_pot }}</code></p></fieldset>{% endif %}
   <label>Temporary Monzo access token <input type="password" name="token" required maxlength="4096" autocomplete="off" spellcheck="false"></label>
-  <p class="muted">Used in backend memory for this attempt, then discarded. Restart/resume needs a fresh token. Each purchase creates one deposit. Notes require an explicitly matched Monzo transaction after deposit.</p>
+   <p class="muted">Used in backend memory for this attempt, then discarded. Restart/resume needs a fresh token. Each purchase creates one deposit and its note is applied automatically before continuing.</p>
   <button>Confirm and run recon</button>
 </form>
+{% else %}<p class="notice">Save the account and pot IDs for each staged allocation in <a href="/settings">Configuration</a>. You only need to configure destinations once; each run asks for a fresh token.</p>{% endif %}
 {% else %}<p class="notice">{{ summary.needs_review }} purchases need review; {{ summary.exceptions }} source exceptions need a disposition. <a href="/review">Continue review</a>. Every outstanding purchase must be staged before running.</p>{% endif %}
 <div class="table-scroll"><table><thead><tr><th>Purchase</th><th>Account</th><th>Amount</th><th>Note</th><th>Status</th></tr></thead><tbody>{% for row in rows %}<tr><td>{{ row.date }} · {{ row.merchant }}</td><td>{{ row.account }}</td><td class="amount">£{{ row.amount }}</td><td>{{ row.description }}</td><td><span class="badge {{ row.queue_status_class() }}">{{ row.queue_status() }}</span></td></tr>{% else %}<tr><td colspan="5">No outstanding purchases.</td></tr>{% endfor %}</tbody></table></div>
 {% endif %}

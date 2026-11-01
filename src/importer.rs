@@ -23,6 +23,8 @@ const HEADERS: [&str; 14] = [
     "Card Used",
 ];
 
+pub const REPAIR_METHOD: &str = "monzo-vcc-extra-columns-v1";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Purchase {
     pub reference: String,
@@ -41,6 +43,9 @@ pub struct Observation {
     pub disposition: &'static str,
     pub reason: Option<&'static str>,
     pub purchase: Option<Purchase>,
+    pub posting_date: Option<String>,
+    /// Canonical columns after the CLI-compatible extra-column repair.
+    pub repaired: Option<Vec<String>>,
 }
 
 /// Positive decimal GBP with exactly two decimal places; optional valid grouping.
@@ -64,7 +69,7 @@ pub fn pennies(text: &str) -> Option<i64> {
     (result > 0).then_some(result)
 }
 
-fn date(text: &str) -> bool {
+pub(crate) fn date(text: &str) -> bool {
     text.len() == 10
         && NaiveDate::parse_from_str(text, "%Y-%m-%d")
             .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == text)
@@ -113,12 +118,24 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Observation>> {
             record_number: observations.len() as i64 + 2,
             source_text: text[start..end].to_owned(),
             disposition: "malformed",
-            reason: Some("Unexpected column count; no automatic repair was attempted."),
+            reason: Some("Unexpected column count; no validated automatic repair was available."),
             purchase: None,
+            posting_date: None,
+            repaired: None,
         };
         if record.len() == HEADERS.len() {
             let values: Vec<_> = indices.iter().map(|&i| &record[i]).collect();
+            row.posting_date = date(values[1]).then(|| values[1].to_owned());
             classify(&values, &mut row);
+        } else if header.iter().eq(HEADERS)
+            && let Some(fields) = repair_extra_columns(&record)
+        {
+            let values: Vec<_> = fields.iter().map(String::as_str).collect();
+            row.posting_date = date(values[1]).then(|| values[1].to_owned());
+            classify(&values, &mut row);
+            if row.disposition != "malformed" && row.disposition != "unsupported" {
+                row.repaired = Some(fields);
+            }
         }
         observations.push(row);
     }
@@ -141,6 +158,49 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Observation>> {
         }
     }
     Ok(observations)
+}
+
+/// Like monzo-cli, fold surplus middle fields into Merchant, retaining the final
+/// ten columns. This intentionally preserves its merchant naming convention,
+/// including city fragments. Only the standard layout with validated anchors
+/// qualifies; already-correct CSV quoting is handled by the CSV reader above.
+fn repair_extra_columns(record: &csv::StringRecord) -> Option<Vec<String>> {
+    if !(15..=32).contains(&record.len()) {
+        return None;
+    }
+    let tail = record.len() - 10;
+    let mut fields: Vec<String> = record.iter().take(3).map(str::to_owned).collect();
+    fields.push(
+        record
+            .iter()
+            .skip(3)
+            .take(tail - 3)
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    fields.extend(record.iter().skip(tail).map(str::to_owned));
+    let country = &fields[5];
+    let reference = &fields[7];
+    let card = &fields[13];
+    if country.len() != 3
+        || !country.bytes().all(|c| c.is_ascii_uppercase())
+        || reference.is_empty()
+        || !reference.bytes().all(|c| c.is_ascii_digit())
+        || card.len() != 4
+        || !card.bytes().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(fields)
+}
+
+pub(crate) fn repaired_csv(records: &[Vec<String>]) -> Result<Vec<u8>> {
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer.write_record(HEADERS).map_err(|_| Error::Worker)?;
+    for record in records {
+        writer.write_record(record).map_err(|_| Error::Worker)?;
+    }
+    writer.into_inner().map_err(|_| Error::Worker)
 }
 
 fn classify(v: &[&str], row: &mut Observation) {

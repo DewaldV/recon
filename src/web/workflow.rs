@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
-    execution::{self, Bank, Destination, Run},
+    execution::{self, Bank, Run},
     monzo::Monzo,
     queue::QueueSummary,
     review::{DetailRow, Filters},
     rules::{AccountRule, MerchantChoice},
+    settings::DestinationSettings,
 };
 
 pub(super) fn return_path(value: &str) -> Result<String> {
@@ -166,13 +167,11 @@ struct Prepare {
     rows: Vec<DetailRow>,
     revision: i64,
     active: Option<i64>,
-    personal_account: String,
-    personal_pot: String,
-    joint_account: String,
-    joint_pot: String,
+    settings: DestinationSettings,
+    destinations_ready: bool,
 }
 pub(super) async fn prepare(State(state): State<AppState>) -> Result<Html<String>> {
-    let (summary, rows, revision, active, previous) = state
+    let (summary, rows, revision, active, settings) = state
         .work(|s| {
             let rows = s.detail_rows()?;
             let summary = QueueSummary::from_rows(&rows, s.unresolved_exception_count()?)?;
@@ -181,54 +180,28 @@ pub(super) async fn prepare(State(state): State<AppState>) -> Result<Html<String
                 rows.into_iter().filter(|r| r.outstanding()).collect(),
                 s.review_revision()?,
                 s.active_run()?,
-                s.run_ids()?.first().map(|id| s.run(*id)).transpose()?,
+                s.destination_settings()?,
             ))
         })
         .await?;
-    let target = |allocation: &str| {
-        previous
-            .as_ref()
-            .and_then(|r| {
-                r.operations
-                    .iter()
-                    .find(|o| o.destination.allocation == allocation)
-            })
-            .map(|o| {
-                (
-                    o.destination.account_id.clone(),
-                    o.destination.pot_id.clone(),
-                )
-            })
-            .unwrap_or_default()
-    };
-    let (personal_account, personal_pot) = target("personal");
-    let (joint_account, joint_pot) = target("joint");
+    let destinations_ready = settings.targets(&summary).is_ok();
     render(Prepare {
         csrf: state.0.csrf.clone(),
         summary,
         rows,
         revision,
         active,
-        personal_account,
-        personal_pot,
-        joint_account,
-        joint_pot,
+        settings,
+        destinations_ready,
     })
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct StartForm {
     csrf: String,
     revision: i64,
     token: String,
-    #[serde(default)]
-    personal_account: String,
-    #[serde(default)]
-    personal_pot: String,
-    #[serde(default)]
-    joint_account: String,
-    #[serde(default)]
-    joint_pot: String,
 }
 pub(super) async fn start(
     State(state): State<AppState>,
@@ -237,7 +210,7 @@ pub(super) async fn start(
     state.check_csrf(&form.csrf)?;
     let permit = state.execution_permit()?;
     let revision = form.revision;
-    let summary = state
+    let targets = state
         .work(move |s| {
             s.verify_execution_guard()?;
             if s.review_revision()? != revision {
@@ -252,33 +225,9 @@ pub(super) async fn start(
                     "Complete review and source exceptions first.".into(),
                 ));
             }
-            Ok(summary)
+            s.destination_settings()?.targets(&summary)
         })
         .await?;
-    let mut targets = Vec::new();
-    if summary.personal_count > 0 {
-        targets.push((
-            Destination {
-                allocation: "personal".into(),
-                account_id: form.personal_account,
-                pot_id: form.personal_pot,
-            },
-            summary.personal_pence,
-        ));
-    }
-    if summary.joint_count > 0 {
-        targets.push((
-            Destination {
-                allocation: "joint".into(),
-                account_id: form.joint_account,
-                pot_id: form.joint_pot,
-            },
-            summary.joint_pence,
-        ));
-    }
-    for (target, _) in &targets {
-        target.validate()?;
-    }
     let bank = Monzo::new(form.token)?;
     bank.preflight(&targets)
         .await
@@ -311,10 +260,6 @@ fn launch(state: AppState, bank: Monzo, id: i64, permit: tokio::sync::OwnedSemap
 pub(super) struct TokenForm {
     csrf: String,
     token: String,
-    #[serde(default)]
-    transaction: String,
-    #[serde(default)]
-    confirmed: Option<String>,
 }
 pub(super) async fn resume(
     State(state): State<AppState>,
@@ -334,29 +279,6 @@ pub(super) async fn resume(
     launch(state, Monzo::new(form.token)?, id, permit);
     Ok(Redirect::to(&format!("/runs/{id}")))
 }
-pub(super) async fn note(
-    State(state): State<AppState>,
-    Path((id, operation)): Path<(i64, i64)>,
-    Form(form): Form<TokenForm>,
-) -> Result<Redirect> {
-    state.check_csrf(&form.csrf)?;
-    if form.confirmed.is_none() {
-        return Err(Error::Invalid(
-            "Confirm the exact Monzo transaction belongs to this deposit.".into(),
-        ));
-    }
-    let _permit = state.execution_permit()?;
-    execution::apply_note(
-        state.0.store.clone(),
-        &Monzo::new(form.token)?,
-        id,
-        operation,
-        form.transaction,
-    )
-    .await?;
-    Ok(Redirect::to(&format!("/runs/{id}")))
-}
-
 #[derive(Template)]
 #[template(path = "runs.html")]
 struct Runs {

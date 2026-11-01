@@ -15,8 +15,13 @@ struct MockBank {
     notes: Mutex<Vec<(i64, String)>>,
     outcomes: Mutex<VecDeque<std::result::Result<(), BankFailure>>>,
     note_outcomes: Mutex<VecDeque<std::result::Result<(), BankFailure>>>,
+    lookup_outcomes: Mutex<VecDeque<std::result::Result<(), BankFailure>>>,
     totals: Mutex<Vec<i64>>,
     reject_preflight: bool,
+    same_transaction: bool,
+    returned_transaction: bool,
+    events: Mutex<Vec<(&'static str, i64)>>,
+    lookups: Mutex<usize>,
 }
 impl Bank for MockBank {
     async fn preflight(
@@ -33,14 +38,48 @@ impl Bank for MockBank {
             Ok(())
         }
     }
-    async fn deposit(&self, op: &Operation) -> std::result::Result<(), BankFailure> {
+    async fn deposit(&self, op: &Operation) -> std::result::Result<Option<String>, BankFailure> {
+        self.events.lock().unwrap().push(("deposit", op.id));
         self.attempts
             .lock()
             .unwrap()
             .push((op.id, op.dedupe_id.clone()));
-        self.outcomes.lock().unwrap().pop_front().unwrap_or(Ok(()))
+        self.outcomes
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Ok(()))?;
+        Ok(self
+            .returned_transaction
+            .then(|| format!("tx_synthetic{}", op.id)))
+    }
+    async fn find_transactions(
+        &self,
+        operations: &[Operation],
+        _used: &BTreeSet<String>,
+    ) -> std::result::Result<Vec<(i64, String)>, BankFailure> {
+        *self.lookups.lock().unwrap() += 1;
+        self.lookup_outcomes
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Ok(()))?;
+        Ok(operations
+            .iter()
+            .map(|op| {
+                (
+                    op.id,
+                    if self.same_transaction {
+                        "tx_same".into()
+                    } else {
+                        format!("tx_synthetic{}", op.id)
+                    },
+                )
+            })
+            .collect())
     }
     async fn annotate(&self, op: &Operation, id: &str) -> std::result::Result<(), BankFailure> {
+        self.events.lock().unwrap().push(("note", op.id));
         self.notes.lock().unwrap().push((op.id, id.into()));
         self.note_outcomes
             .lock()
@@ -194,20 +233,10 @@ async fn partial_failure_resume_and_notes_never_repeat_confirmed_deposits() {
     assert!(
         run.operations
             .iter()
-            .all(|o| o.deposit == "confirmed" && o.note_status == "pending")
+            .all(|o| o.deposit == "confirmed" && o.note_status == "complete")
     );
     assert_eq!(s.lock().unwrap().queue_summary().unwrap().outstanding, 0);
-    for op in run.operations {
-        execution::apply_note(
-            s.clone(),
-            &bank,
-            id,
-            op.id,
-            format!("tx_synthetic{}", op.id),
-        )
-        .await
-        .unwrap();
-    }
+    assert_eq!(bank.notes.lock().unwrap().len(), 2);
     assert_eq!(s.lock().unwrap().run(id).unwrap().status, "complete");
     assert_eq!(bank.attempts.lock().unwrap().len(), 3);
     let db = Connection::open(d.path().join("recon.sqlite3")).unwrap();
@@ -274,17 +303,17 @@ async fn note_mapping_is_unique_and_confirmed_purchase_cannot_be_reopened() {
         .prepare_run(s.review_revision().unwrap(), &targets())
         .unwrap();
     let s = Arc::new(Mutex::new(s));
-    let bank = MockBank::default();
-    execution::execute(s.clone(), &bank, id).await.unwrap();
+    let bank = MockBank {
+        same_transaction: true,
+        ..Default::default()
+    };
+    assert!(execution::execute(s.clone(), &bank, id).await.is_err());
     let ops = s.lock().unwrap().run(id).unwrap().operations;
-    execution::apply_note(s.clone(), &bank, id, ops[0].id, "tx_same".into())
-        .await
-        .unwrap();
-    assert!(
-        execution::apply_note(s.clone(), &bank, id, ops[1].id, "tx_same".into())
-            .await
-            .is_err()
-    );
+    assert_eq!(ops[0].mapped_transaction, "tx_same");
+    assert_eq!(ops[0].note_status, "complete");
+    assert!(ops[1].mapped_transaction.is_empty());
+    assert_eq!(ops[1].deposit, "confirmed");
+    assert_eq!(bank.notes.lock().unwrap().len(), 1);
     assert!(
         s.lock()
             .unwrap()
@@ -378,17 +407,12 @@ async fn failed_note_retry_preserves_mapping_across_restart_without_depositing_a
         .unwrap();
     let store = Arc::new(Mutex::new(store));
     let bank = MockBank::default();
-    execution::execute(store.clone(), &bank, id).await.unwrap();
     let op = store.lock().unwrap().run(id).unwrap().operations.remove(0);
     bank.note_outcomes
         .lock()
         .unwrap()
         .push_back(Err(BankFailure::Uncertain));
-    assert!(
-        execution::apply_note(store.clone(), &bank, id, op.id, "tx_reserved".into())
-            .await
-            .is_err()
-    );
+    assert!(execution::execute(store.clone(), &bank, id).await.is_err());
     drop(store);
     let store = Arc::new(Mutex::new(Store::open(dir.path()).unwrap()));
     let saved = store.lock().unwrap().run(id).unwrap().operations.remove(0);
@@ -398,21 +422,28 @@ async fn failed_note_retry_preserves_mapping_across_restart_without_depositing_a
             &*saved.note_status,
             &*saved.mapped_transaction
         ),
-        ("confirmed", "pending", "tx_reserved")
+        (
+            "confirmed",
+            "pending",
+            format!("tx_synthetic{}", op.id).as_str()
+        )
     );
-    assert!(
-        execution::apply_note(store.clone(), &bank, id, op.id, "tx_other".into())
-            .await
-            .is_err()
-    );
-    execution::apply_note(store.clone(), &bank, id, op.id, "tx_reserved".into())
-        .await
-        .unwrap();
+    execution::execute(store.clone(), &bank, id).await.unwrap();
     assert_eq!(bank.attempts.lock().unwrap().len(), 2);
     assert_eq!(
         *bank.notes.lock().unwrap(),
-        vec![(op.id, "tx_reserved".into()), (op.id, "tx_reserved".into())]
+        vec![
+            (op.id, format!("tx_synthetic{}", op.id)),
+            (op.id, format!("tx_synthetic{}", op.id)),
+            (op.id + 1, format!("tx_synthetic{}", op.id + 1))
+        ]
     );
+    assert_eq!(
+        *bank.lookups.lock().unwrap(),
+        2,
+        "a recorded mapping is not rediscovered on retry"
+    );
+    assert_eq!(store.lock().unwrap().run(id).unwrap().status, "complete");
     let history = store
         .lock()
         .unwrap()
@@ -427,4 +458,109 @@ async fn failed_note_retry_preserves_mapping_across_restart_without_depositing_a
     ] {
         assert!(history.iter().any(|e| e.kind == kind), "missing {kind}");
     }
+}
+
+#[tokio::test]
+async fn returned_transaction_is_persisted_and_note_precedes_next_deposit() {
+    let (_dir, mut s) = setup();
+    let id = s
+        .prepare_run(s.review_revision().unwrap(), &targets())
+        .unwrap();
+    let ops = s.run(id).unwrap().operations;
+    let s = Arc::new(Mutex::new(s));
+    let bank = MockBank {
+        returned_transaction: true,
+        ..Default::default()
+    };
+    execution::execute(s.clone(), &bank, id).await.unwrap();
+    assert_eq!(*bank.lookups.lock().unwrap(), 0);
+    assert_eq!(
+        *bank.events.lock().unwrap(),
+        vec![
+            ("deposit", ops[0].id),
+            ("note", ops[0].id),
+            ("deposit", ops[1].id),
+            ("note", ops[1].id)
+        ]
+    );
+    assert_eq!(s.lock().unwrap().run(id).unwrap().status, "complete");
+}
+
+#[tokio::test]
+async fn legacy_confirmed_deposits_resume_all_notes_without_funds_or_deposit_calls() {
+    let (dir, mut s) = setup();
+    let id = s
+        .prepare_run(s.review_revision().unwrap(), &targets())
+        .unwrap();
+    let ops = s.run(id).unwrap().operations;
+    let db = Connection::open(dir.path().join("recon.sqlite3")).unwrap();
+    for op in &ops {
+        db.execute("INSERT INTO operation_events(operation_id,deposit,note,message) VALUES(?1,'in_flight','pending','Legacy submission')",[op.id]).unwrap();
+        db.execute("INSERT INTO operation_events(operation_id,deposit,note,message) VALUES(?1,'confirmed','pending','Legacy deposits-only result')",[op.id]).unwrap();
+    }
+    let s = Arc::new(Mutex::new(s));
+    let bank = MockBank {
+        reject_preflight: true,
+        ..Default::default()
+    };
+    bank.note_outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(BankFailure::Unauthorized));
+    assert!(execution::execute(s.clone(), &bank, id).await.is_err());
+    assert!(
+        s.lock()
+            .unwrap()
+            .run(id)
+            .unwrap()
+            .operations
+            .iter()
+            .all(|o| !o.mapped_transaction.is_empty() && o.note_status == "pending")
+    );
+    drop(s);
+    let s = Arc::new(Mutex::new(Store::open(dir.path()).unwrap()));
+    execution::execute(s.clone(), &bank, id).await.unwrap();
+    assert!(bank.attempts.lock().unwrap().is_empty());
+    assert!(bank.totals.lock().unwrap().is_empty());
+    assert_eq!(bank.notes.lock().unwrap().len(), 3);
+    assert_eq!(*bank.lookups.lock().unwrap(), 1);
+    assert_eq!(s.lock().unwrap().run(id).unwrap().status, "complete");
+    execution::execute(s.clone(), &bank, id).await.unwrap();
+    assert_eq!(bank.notes.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn delayed_note_discovery_resumes_without_repeating_the_confirmed_deposit() {
+    let (dir, mut s) = setup();
+    let id = s
+        .prepare_run(s.review_revision().unwrap(), &targets())
+        .unwrap();
+    let s = Arc::new(Mutex::new(s));
+    let bank = MockBank::default();
+    bank.lookup_outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(BankFailure::NoteMatchPending));
+    assert!(execution::execute(s.clone(), &bank, id).await.is_err());
+    let run = s.lock().unwrap().run(id).unwrap();
+    assert_eq!(run.status, "active");
+    assert_eq!(run.operations[0].deposit, "confirmed");
+    assert!(run.operations[0].mapped_transaction.is_empty());
+    assert_eq!(run.operations[1].deposit, "pending");
+    assert!(bank.notes.lock().unwrap().is_empty());
+    assert_eq!(bank.attempts.lock().unwrap().len(), 1);
+    drop(s);
+    let s = Arc::new(Mutex::new(Store::open(dir.path()).unwrap()));
+    execution::execute(s.clone(), &bank, id).await.unwrap();
+    assert_eq!(bank.attempts.lock().unwrap().len(), 2);
+    assert_eq!(
+        *bank.events.lock().unwrap(),
+        vec![
+            ("deposit", run.operations[0].id),
+            ("note", run.operations[0].id),
+            ("deposit", run.operations[1].id),
+            ("note", run.operations[1].id)
+        ]
+    );
+    assert_eq!(s.lock().unwrap().run(id).unwrap().status, "complete");
 }

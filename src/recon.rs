@@ -166,7 +166,8 @@ impl Store {
             UNION ALL SELECT created_at, 'related merchant default', original_name || ' v' || version || ' · ' || coalesce(category,'unset') || ' · ' || coalesce(description,'unset'), CASE WHEN source_id IS NULL THEN 'Manual default' ELSE 'Catalogue source #' || source_id || ', record ' || source_record END FROM merchant_definitions WHERE merchant_key IN (?2,?3)
             UNION ALL SELECT created_at, 'related account rule', merchant_name || ' v' || version || ' · ' || coalesce(account,'disabled'), CASE card WHEN '' THEN 'Any card' ELSE 'Card ' || card END FROM account_rules WHERE merchant_key IN (?2,?3) AND (card='' OR card=(SELECT card_used FROM purchases WHERE id=?1))
             UNION ALL SELECT created_at, 'merchant alias', original_name || ' → ' || target_key, '' FROM merchant_aliases WHERE alias_key=?2
-            UNION ALL SELECT e.created_at, 'source disposition', 'Observation #' || e.observation_id, e.reason FROM exception_decisions e JOIN source_observations o ON o.id=e.observation_id WHERE o.purchase_id=?1
+             UNION ALL SELECT e.created_at, 'source disposition', 'Observation #' || e.observation_id, e.reason FROM exception_decisions e JOIN source_observations o ON o.id=e.observation_id WHERE o.purchase_id=?1
+             UNION ALL SELECT r.created_at, 'automatic CSV repair', r.method, 'Original import #' || o.import_id || ', record ' || o.record_number || ': ' || r.normalized_record FROM observation_repairs r JOIN source_observations o ON o.id=r.observation_id JOIN source_observations n ON n.id=r.replacement_observation_id WHERE n.purchase_id=?1
             UNION ALL SELECT s.created_at, 'historical import', s.filename || ', record ' || m.record, m.proposed FROM historical_matches m JOIN historical_sources s ON s.id=m.source_id WHERE m.purchase_id=?1
             UNION ALL SELECT e.created_at, 'execution', 'Recon #' || o.run_id || ' · deposit ' || e.deposit || ' · note ' || e.note, e.message || coalesce(' · ' || e.transaction_id,'') FROM operation_events e JOIN run_operations o ON o.id=e.operation_id WHERE o.purchase_id=?1
             UNION ALL SELECT m.created_at, 'note mapping', 'Recon #' || o.run_id, m.transaction_id FROM note_mappings m JOIN run_operations o ON o.id=m.operation_id WHERE o.purchase_id=?1
@@ -208,6 +209,13 @@ impl Store {
                     "unknown" | "outstanding" | "external" | "excluded"
                 ) {
                     return Err(Error::Invalid("Invalid handling state.".into()));
+                }
+                if matches!(state.as_str(), "unknown" | "outstanding") {
+                    for id in ids {
+                        if self.db.query_row("SELECT EXISTS(SELECT 1 FROM purchases p JOIN recon_cutover c ON p.posting_date<c.posting_date WHERE p.id=?1)", [id], |r| r.get::<_,bool>(0))? {
+                            return Err(Error::Invalid("This purchase predates the permanent recon start date and belongs to historical reconciliation.".into()));
+                        }
+                    }
                 }
                 if state == "outstanding" && !reopen {
                     for id in ids {

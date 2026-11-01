@@ -29,14 +29,14 @@ Virgin-app export and Proton Drive transfer remain manual initially.
   [decision log](decisions.md) and [alternatives](frontend-options.md).
 - Local-only by default; financial data and secrets stay off hosted services.
 - Offline import/review needs no Monzo token.
-- The user enters a temporary Monzo token when running/resuming or repairing a note.
+- The user enters a temporary Monzo token when running/resuming the recon.
   Requests use it in backend memory; it is not persisted in the database, browser
   storage, or logs. Each attempt needs credentials again.
 - Categories are local reporting data: the documented Monzo API does not expose
-  category updates. Descriptions can become transaction notes.
+  category updates. Descriptions are applied automatically as transaction notes.
 - Preserve one deposit per purchase rather than aggregating by account.
-- Import/review remains offline. The explicit Run recon action now implements
-  online execution; live acceptance is still outstanding.
+- Import/review remains offline. The explicit Run recon action implements online
+  execution; the user has completed live deposits and automatic note recovery.
 
 ## Proposed architecture
 

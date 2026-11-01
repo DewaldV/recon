@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Import your Virgin CSV</h1>
-<p>Upload the original export. Known purchases are recognised across overlapping files; your choices are preserved.</p>
+<p>Upload the original export. Known purchases are recognised across overlapping files; your choices are preserved. Recognised extra-column errors are repaired using the monzo-cli convention and listed in the import results. Re-uploading a previous file retries repairable unresolved rows.</p>
+{% if let Some(date) = start_date %}<p class="notice">Recon starts with posting dates on or after <strong>{{ date }}</strong>. Earlier purchases belong to historical reconciliation and are automatically excluded, including on future imports.</p>{% endif %}
 <section class="panel">
 <form action="/imports" method="post" enctype="multipart/form-data">
   <input type="hidden" name="csrf" value="{{ csrf }}">

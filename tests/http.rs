@@ -14,6 +14,141 @@ use tower::ServiceExt;
 const FIRST: &str = include_str!("fixtures/virgin-first.csv");
 
 #[tokio::test]
+async fn settings_save_rejects_stale_edits_and_tokens_and_invalidates_old_run_forms() {
+    let (directory, app, cookie, csrf) = app().await;
+    let db = rusqlite::Connection::open(directory.path().join("recon.sqlite3")).unwrap();
+    let revision: i64 = db
+        .query_row("SELECT revision FROM review_revision WHERE id=1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let fields = format!(
+        "csrf={csrf}&version=0&personal_account=acc_saved&personal_pot=pot_saved&joint_account=&joint_pot="
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/settings",
+            &cookie,
+            fields.clone(),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()["location"], "/settings?saved=true");
+    let html = text(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/settings?saved=true",
+                &cookie,
+                "",
+                "text/html",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("value=\"acc_saved\"") && html.contains("value=\"pot_saved\""));
+    assert!(!html.contains("name=\"token\""));
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/settings",
+                &cookie,
+                fields.clone(),
+                "application/x-www-form-urlencoded"
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let token = "synthetic-credential-never-saved";
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/settings",
+            &cookie,
+            format!("{fields}&token={token}"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!text(response).await.contains(token));
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/runs/start",
+            &cookie,
+            format!("csrf={csrf}&revision={revision}&token={token}"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(!text(response).await.contains(token));
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/runs/start",
+            &cookie,
+            format!("csrf={csrf}&revision={revision}&token={token}&personal_account=acc_override"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!text(response).await.contains(token));
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM destination_settings", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM recon_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let bytes = std::fs::read(directory.path().join("recon.sqlite3")).unwrap();
+    assert!(!bytes.windows(token.len()).any(|w| w == token.as_bytes()));
+}
+
+#[tokio::test]
+async fn import_page_reports_auto_repairs_and_escapes_original_and_parsed_fields() {
+    let (_directory, app, cookie, csrf) = app().await;
+    upload(
+        &app,
+        &cookie,
+        &csrf,
+        &FIRST.replace("SYNTHETIC SHOP", "<script>shop</script>, TOWN"),
+    )
+    .await;
+    let response = app
+        .clone()
+        .oneshot(request("GET", "/imports/1", &cookie, "", "text/html"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("2 automatic CSV repairs"));
+    assert!(html.contains("monzo-vcc-extra-columns-v1"));
+    assert!(html.contains("Original source (excerpt):"));
+    assert!(html.contains("Parsed fields:"));
+    assert!(html.contains("&lt;script&gt;shop") || html.contains("&#60;script&#62;shop"));
+    assert!(!html.contains("<script>shop</script>"));
+}
+
+#[tokio::test]
 async fn rule_picker_prefills_current_and_disabled_rules_and_returns_to_selection() {
     let (_directory, app, cookie, csrf) = app().await;
     upload(&app, &cookie, &csrf, FIRST).await;
@@ -123,8 +258,8 @@ async fn execution_edit_and_history_routes_reject_untrusted_requests_without_ech
     let forms = [
         ("/review/accounts", "account_1=joint&original_1=&signature_1=stale".into()),
         ("/runs/start", format!("revision=0&token={token}")),
+        ("/settings", "version=0&personal_account=acc_test&personal_pot=pot_test&joint_account=&joint_pot=".into()),
         ("/runs/1/resume", format!("token={token}")),
-        ("/runs/1/notes/1", format!("token={token}&transaction=tx_test&confirmed=on")),
         ("/review/1/edit", "signature=stale&return_to=%2Freview&account=personal&category=Shopping&description=Test&action=stage".into()),
     ];
     for (path, fields) in forms {
@@ -1121,7 +1256,20 @@ async fn global_queue_staging_external_handling_totals_and_history_workflow() {
             .unwrap(),
     )
     .await;
+    assert!(ready.contains("Save the account and pot IDs"));
+    assert!(!ready.contains("name=\"token\""));
+    let response=app.clone().oneshot(request("POST","/settings",&cookie,format!("csrf={csrf}&version=0&personal_account=&personal_pot=&joint_account=acc_saved_joint&joint_pot=pot_saved_joint"),"application/x-www-form-urlencoded")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let ready = text(
+        app.clone()
+            .oneshot(request("GET", "/run", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
     assert!(ready.contains("Confirm and run recon"));
+    assert!(ready.contains("acc_saved_joint") && ready.contains("pot_saved_joint"));
+    assert!(!ready.contains("name=\"joint_account\"") && !ready.contains("name=\"joint_pot\""));
     let html = text(
         app.clone()
             .oneshot(request(
@@ -1191,6 +1339,7 @@ async fn recon_routes_and_handling_mutations_require_authentication_origin_and_c
         "/runs",
         "/rules",
         "/merchants",
+        "/settings",
     ] {
         assert_eq!(
             app.clone()

@@ -14,7 +14,7 @@ use crate::{
     importer::{self, Purchase},
 };
 
-const MIGRATIONS: [&str; 7] = [
+const MIGRATIONS: [&str; 10] = [
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_original_currency.sql"),
     include_str!("../migrations/0003_merchant_review.sql"),
@@ -22,6 +22,9 @@ const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/0005_single_queue.sql"),
     include_str!("../migrations/0006_runs.sql"),
     include_str!("../migrations/0007_historical_decisions.sql"),
+    include_str!("../migrations/0008_recon_cutover.sql"),
+    include_str!("../migrations/0009_import_repairs.sql"),
+    include_str!("../migrations/0010_destination_settings.sql"),
 ];
 
 pub struct Store {
@@ -57,6 +60,17 @@ pub struct ImportSummary {
     pub counts: Vec<(String, i64)>,
     pub exceptions: Vec<Exception>,
     pub total: i64,
+    pub repairs: Vec<ImportRepair>,
+}
+
+#[derive(Debug)]
+pub struct ImportRepair {
+    pub record_number: i64,
+    pub replacement_import: i64,
+    pub replacement_record: i64,
+    pub method: String,
+    pub normalized_record: String,
+    pub source_text: String,
 }
 
 #[derive(Debug)]
@@ -172,6 +186,30 @@ impl Store {
     }
 
     pub fn import(&mut self, filename: &str, bytes: &[u8]) -> Result<i64> {
+        if let Some(id) = self.import_id(bytes)? {
+            self.repair_import(id)?;
+            return Ok(id);
+        }
+        let observations = importer::parse(bytes)?;
+        self.backup()?;
+        self.atomic(|s| s.import_observations(filename, bytes, observations))
+    }
+
+    pub(crate) fn import_id(&self, bytes: &[u8]) -> Result<Option<i64>> {
+        let hash = format!("{:x}", Sha256::digest(bytes));
+        Ok(self.db.query_row(
+            "SELECT i.id FROM imports i JOIN source_accounts a ON a.id=i.source_account_id WHERE a.account_key='virgin-primary' AND i.sha256=?1",
+            [hash], |r| r.get(0),
+        ).optional()?)
+    }
+
+    /// Caller owns the transaction and backup, including any recovery provenance.
+    pub(crate) fn import_observations(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        observations: Vec<importer::Observation>,
+    ) -> Result<i64> {
         let hash = format!("{:x}", Sha256::digest(bytes));
         let source: i64 = self.db.query_row(
             "SELECT id FROM source_accounts WHERE account_key='virgin-primary'",
@@ -189,12 +227,8 @@ impl Store {
         {
             return Ok(id);
         }
-        let observations = importer::parse(bytes)?;
-        // Snapshot before first new import too; the backup includes schema and prior decisions.
-        self.backup()?;
-        let tx = self
-            .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let cutover = self.cutover_date()?;
+        let tx = &self.db;
         tx.execute("INSERT INTO imports (source_account_id, sha256, original_filename, original_bytes) VALUES (?1, ?2, ?3, ?4)", params![source, hash, filename, bytes])?;
         let id = tx.last_insert_rowid();
         for mut observation in observations {
@@ -218,8 +252,15 @@ impl Store {
                 }
             }
             tx.execute("INSERT INTO source_observations (import_id, source_account_id, record_number, source_text, disposition, reason, purchase_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![id, source, observation.record_number, observation.source_text, observation.disposition, observation.reason, purchase_id])?;
+            if let Some(fields) = &observation.repaired {
+                let observation_id = tx.last_insert_rowid();
+                crate::import_repair::record_repair(tx, observation_id, observation_id, fields)?;
+            }
+            if let Some(date) = &cutover {
+                crate::cutover::resolve_observation(tx, id, &observation, date)?;
+            }
         }
-        tx.commit()?;
+        crate::cutover::exclude_purchases(tx)?;
         Ok(id)
     }
 
@@ -261,6 +302,8 @@ impl Store {
             counts: counts.into_iter().collect(),
             exceptions,
             total,
+            repairs: self.db.prepare("SELECT o.record_number,n.import_id,n.record_number,r.method,r.normalized_record,o.source_text FROM observation_repairs r JOIN source_observations o ON o.id=r.observation_id JOIN source_observations n ON n.id=r.replacement_observation_id WHERE o.import_id=?1 ORDER BY o.record_number")?
+                .query_map([id], |r| Ok(ImportRepair {record_number:r.get(0)?,replacement_import:r.get(1)?,replacement_record:r.get(2)?,method:r.get(3)?,normalized_record:r.get(4)?,source_text:r.get::<_,String>(5)?.chars().take(2000).collect()}))?.collect::<rusqlite::Result<_>>()?,
         })
     }
 

@@ -18,6 +18,7 @@ use crate::{
     importer::MAX_UPLOAD,
     storage::{ImportSummary, Store},
 };
+mod settings;
 mod workflow;
 
 #[derive(Clone)]
@@ -119,12 +120,12 @@ pub fn router(state: AppState) -> Router {
         .route("/review/accounts", post(save_page_accounts))
         .route("/merchants", get(workflow::merchants))
         .route("/rules", get(workflow::rules))
+        .route("/settings", get(settings::page).post(settings::save))
         .route("/run", get(workflow::prepare))
         .route("/runs", get(workflow::runs))
         .route("/runs/start", post(workflow::start))
         .route("/runs/{id}", get(workflow::run))
         .route("/runs/{id}/resume", post(workflow::resume))
-        .route("/runs/{id}/notes/{operation}", post(workflow::note))
         .route("/review/stage", post(stage_change))
         .route("/review/catalogue", post(catalogue_upload))
         .route("/history/import", post(workflow::history_upload))
@@ -238,13 +239,17 @@ async fn session(State(state): State<AppState>, Form(form): Form<SessionForm>) -
 struct Home {
     csrf: String,
     imports: Vec<(i64, String)>,
+    start_date: Option<String>,
 }
 
 async fn home(State(state): State<AppState>) -> Result<Html<String>> {
-    let imports = state.work(|s| s.recent_imports()).await?;
+    let (imports, start_date) = state
+        .work(|s| Ok((s.recent_imports()?, s.cutover_date()?)))
+        .await?;
     render(Home {
         csrf: state.0.csrf.clone(),
         imports,
+        start_date,
     })
 }
 
