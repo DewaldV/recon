@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Purchase #{{ id }} · decision history</h1><p>Handling decisions are manual assertions with evidence notes, not bank verification. Externally handled means already funded outside recon, not repayment of the credit-card bill.</p>
+<div class="table-scroll"><table><thead><tr><th>Time (UTC)</th><th>Kind</th><th>Decision</th><th>Reason/evidence</th></tr></thead><tbody>{% for event in events %}<tr><td>{{ event.at }}</td><td>{{ event.kind }}</td><td>{{ event.value }}</td><td>{{ event.reason }}</td></tr>{% else %}<tr><td colspan="4">No decisions yet; handling is unknown.</td></tr>{% endfor %}</tbody></table></div><p><a href="/review">Return to review</a></p>
+{% endblock %}

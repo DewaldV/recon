@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ summary.recon.name }}</h1><p>Recon #{{ summary.recon.id }} · {{ summary.recon.status }}</p>
+<p>{{ summary.total }} explicitly selected purchases. Outstanding-ready means eligible for later approval, not permission to move money. No exports or Monzo execution are available.</p>
+<p class="warning">This first slice scopes canonical purchases only. Missing-reference, malformed, and pending source exceptions remain in <a href="/">import summaries</a> and cannot yet be included or resolved here. These totals are not a completed executable recon.</p>
+<dl class="counts"><div><dt>Outstanding-ready</dt><dd>{{ summary.ready }}</dd></div><div><dt>Outstanding but blocked</dt><dd>{{ summary.blocked }}</dd></div><div><dt>Handling unknown</dt><dd>{{ summary.unknown }}</dd></div><div><dt>Handled externally</dt><dd>{{ summary.external }}</dd></div><div><dt>Excluded</dt><dd>{{ summary.excluded }}</dd></div></dl>
+<section class="panel"><h2>Outstanding-ready totals only</h2><p id="personal-total">Personal: {{ summary.personal_count }} purchases · £{{ summary.personal_amount }}</p><p id="joint-total">Joint: {{ summary.joint_count }} purchases · £{{ summary.joint_amount }}</p><p>Unknown, externally handled, excluded, blocked, and archived work contribute nothing to these totals. Archived recons have no ready work; archiving does not settle purchases.</p></section>
+<p><a class="button" href="/review?recon_id={{ summary.recon.id }}">Review this selection</a></p>
+<form method="post" action="/review/stage" class="panel"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="recon_status"><input type="hidden" name="recon_id" value="{{ summary.recon.id }}">
+<label>Status <select name="status"><option value="archived">Archived</option><option value="active">Active</option></select></label><label>Reason <textarea name="reason" required maxlength="4000"></textarea></label><button>Preview status change</button></form>
+<h2>Status history</h2><ul>{% for event in summary.status_history %}<li>{{ event.at }} · {{ event.value }} · {{ event.reason }}</li>{% endfor %}</ul>
+{% endblock %}

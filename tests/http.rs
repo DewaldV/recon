@@ -689,3 +689,253 @@ async fn bulk_review_http_stale_preview_and_selection_bounds() {
         );
     }
 }
+
+async fn stage_and_confirm(app: &Router, cookie: &str, csrf: &str, fields: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/review/stage",
+            cookie,
+            format!("csrf={csrf}&{fields}"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()["location"].to_str().unwrap().to_owned();
+    let preview = app
+        .clone()
+        .oneshot(request("GET", &location, cookie, "", "text/html"))
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let html = text(preview).await;
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("{location}/commit"),
+            cookie,
+            format!("csrf={csrf}&allow_categories=on"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    html
+}
+
+#[tokio::test]
+async fn recon_scope_external_handling_totals_and_history_workflow() {
+    let (_directory, app, cookie, csrf) = app().await;
+    upload(&app, &cookie, &csrf, FIRST).await;
+    let preview = stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=create_recon&name=Synthetic%20October",
+    )
+    .await;
+    assert!(preview.contains("Create active recon: Synthetic October"));
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", "/recons/1", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("0 explicitly selected purchases"));
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=membership_add&recon_id=1&pick_1_0=on&pick_2_0=on&reason=Selected%20for%20October",
+    )
+    .await;
+    stage_and_confirm(&app,&cookie,&csrf,"action=default&merchant=SYNTHETIC%20SHOP&category=Shopping&description=Synthetic%20purchase").await;
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=accounts&account=joint&pick_1_0=on&pick_2_0=on",
+    )
+    .await;
+    stage_and_confirm(&app,&cookie,&csrf,"action=handling&handling=external&pick_1_1=on&reason=Partner%20already%20funded%20the%20pot").await;
+    stage_and_confirm(&app,&cookie,&csrf,"action=handling&handling=outstanding&pick_2_1=on&reason=Confirmed%20not%20handled%20elsewhere").await;
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", "/recons/1", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("2 explicitly selected purchases"));
+    assert!(html.contains("Joint: 1 purchases · £12.34"));
+    assert!(html.contains("Personal: 0 purchases · £0.00"));
+    assert!(html.contains("No exports or Monzo execution"));
+    let html = text(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/review?recon_id=1&view=ready",
+                &cookie,
+                "",
+                "text/html",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("1 distinct purchases"));
+    assert!(html.contains("id=\"review-2\""));
+    assert!(!html.contains("id=\"review-1\""));
+    assert!(html.contains("recon_id=1"));
+    let html = text(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/review/1/history",
+                &cookie,
+                "",
+                "text/html",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("external v1"));
+    assert!(html.contains("Partner already funded the pot"));
+    assert!(html.contains("Synthetic October: add v1"));
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/review/stage",
+            &cookie,
+            format!("csrf={csrf}&action=handling&handling=outstanding&pick_1_1=on&reason=Reopen"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let preview = stage_and_confirm(&app,&cookie,&csrf,"action=handling&handling=outstanding&pick_1_1=on&reason=Confirmed%20original%20transfer%20was%20reversed&reopen=on").await;
+    assert!(preview.contains("Explicit reopening was requested"));
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=recon_status&recon_id=1&status=archived&reason=Archive%20is%20not%20payment",
+    )
+    .await;
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", "/recons/1", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("Joint: 0 purchases · £0.00"));
+    assert!(html.contains("archived"));
+}
+
+#[tokio::test]
+async fn recon_routes_and_handling_mutations_require_authentication_origin_and_csrf() {
+    let (_directory, app, cookie, csrf) = app().await;
+    for path in ["/recons", "/recons/1", "/review/1/history"] {
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", path, "", "", "text/html"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    upload(&app, &cookie, &csrf, FIRST).await;
+    for fields in [
+        "csrf=bad&action=create_recon&name=Denied",
+        "action=handling&handling=external&pick_1_0=on&reason=Denied",
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    "/review/stage",
+                    &cookie,
+                    fields,
+                    "application/x-www-form-urlencoded"
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut req = request(
+        "POST",
+        "/review/stage",
+        &cookie,
+        format!("csrf={csrf}&action=handling&handling=external&pick_1_0=on&reason=Denied"),
+        "application/x-www-form-urlencoded",
+    );
+    req.headers_mut()
+        .insert("origin", "https://evil.invalid".parse().unwrap());
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    let html = text(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/review/1/history",
+                &cookie,
+                "",
+                "text/html",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("No decisions yet; handling is unknown"));
+    assert_eq!(
+        app.clone()
+            .oneshot(request("GET", "/recons/999", &cookie, "", "text/html"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn recon_names_reasons_and_history_are_escaped() {
+    let (_directory, app, cookie, csrf) = app().await;
+    upload(&app, &cookie, &csrf, FIRST).await;
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=create_recon&name=%3Cscript%3Eevil%3C%2Fscript%3E",
+    )
+    .await;
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=handling&handling=external&pick_1_0=on&reason=%3Cb%3Enot%20markup%3C%2Fb%3E",
+    )
+    .await;
+    for path in ["/recons", "/recons/1", "/review", "/review/1/history"] {
+        let html = text(
+            app.clone()
+                .oneshot(request("GET", path, &cookie, "", "text/html"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(!html.contains("<script>evil"));
+        assert!(!html.contains("<b>not markup"));
+    }
+}

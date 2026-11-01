@@ -1,5 +1,6 @@
 pub mod config;
 pub mod importer;
+pub mod recon;
 pub mod review;
 pub mod storage;
 pub mod web;

@@ -99,6 +99,9 @@ pub fn router(state: AppState) -> Router {
         .route("/review/previews/{token}", get(review_preview))
         .route("/review/previews/{token}/commit", post(commit_change))
         .route("/review/{id}/account", post(decide))
+        .route("/review/{id}/history", get(purchase_history))
+        .route("/recons", get(recon_list))
+        .route("/recons/{id}", get(recon_summary))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 64 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -380,13 +383,16 @@ fn review_link(f: &crate::review::Filters, page: usize) -> String {
             .collect()
     }
     format!(
-        "/review?q={}&account={}&missing={}&view={}&page={page}{}",
+        "/review?q={}&account={}&missing={}&view={}&page={page}{}{}",
         encode(&f.q),
         encode(&f.account),
         encode(&f.missing),
         encode(&f.view),
         f.import_id
             .map(|id| format!("&import_id={id}"))
+            .unwrap_or_default(),
+        f.recon_id
+            .map(|id| format!("&recon_id={id}"))
             .unwrap_or_default()
     )
 }
@@ -461,6 +467,30 @@ async fn stage_change(
             rows,
             account: value("account"),
         },
+        "handling" => Change::Handling {
+            ids: rows.iter().map(|r| r.0).collect(),
+            state: value("handling"),
+            reason: value("reason"),
+            reopen: form.contains_key("reopen"),
+        },
+        "membership_add" | "membership_remove" => Change::Membership {
+            ids: rows.iter().map(|r| r.0).collect(),
+            recon_id: value("recon_id")
+                .parse()
+                .map_err(|_| Error::Invalid("Choose a recon.".into()))?,
+            include: value("action") == "membership_add",
+            reason: value("reason"),
+        },
+        "create_recon" => Change::CreateRecon {
+            name: value("name"),
+        },
+        "recon_status" => Change::ReconStatus {
+            recon_id: value("recon_id")
+                .parse()
+                .map_err(|_| Error::Invalid("Choose a recon.".into()))?,
+            status: value("status"),
+            reason: value("reason"),
+        },
         _ => return Err(Error::Invalid("Choose a review action.".into())),
     };
     let token = state.work(move |s| s.stage_review(change)).await?;
@@ -524,6 +554,9 @@ struct ReviewPreview {
     account: String,
     target: String,
     catalogue: bool,
+    operation: String,
+    reason: String,
+    reopen: bool,
 }
 async fn review_preview(
     State(state): State<AppState>,
@@ -541,6 +574,9 @@ async fn review_preview(
         account: String::new(),
         target: String::new(),
         catalogue: false,
+        operation: String::new(),
+        reason: String::new(),
+        reopen: false,
     };
     match &page.data.change {
         Change::Catalogue { filename, .. } => {
@@ -579,6 +615,57 @@ async fn review_preview(
                 account.clone()
             };
         }
+        Change::Handling {
+            state: handling,
+            reason,
+            reopen,
+            ..
+        } => {
+            page.title = "Set purchase handling state".into();
+            page.operation = format!(
+                "New handling: {handling}. External means already funded outside recon; do not deposit again. Unknown is blocked; outstanding is an explicit assertion, not payment approval."
+            );
+            page.reason = reason.clone();
+            page.reopen = *reopen;
+        }
+        Change::CreateRecon { name } => {
+            page.title = "Create recon workspace".into();
+            page.operation = format!(
+                "Create active recon: {name}. It starts empty; imports are never automatically selected."
+            );
+        }
+        Change::Membership {
+            recon_id,
+            include,
+            reason,
+            ..
+        } => {
+            let id = *recon_id;
+            let recon = state.work(move |s| s.recon_info(id)).await?;
+            page.title = "Change explicit recon selection".into();
+            page.operation = format!(
+                "{} selected purchases {} recon #{}: {}. Handling history is unchanged.",
+                if *include { "Add" } else { "Remove" },
+                if *include { "to" } else { "from" },
+                recon.id,
+                recon.name
+            );
+            page.reason = reason.clone();
+        }
+        Change::ReconStatus {
+            recon_id,
+            status,
+            reason,
+        } => {
+            let id = *recon_id;
+            let recon = state.work(move |s| s.recon_info(id)).await?;
+            page.title = "Change recon status".into();
+            page.operation = format!(
+                "Recon #{} {} → {status}. Archiving does not mark any purchase handled or paid; reopening does not override handling history.",
+                recon.id, recon.name
+            );
+            page.reason = reason.clone();
+        }
     }
     render(page)
 }
@@ -600,4 +687,49 @@ async fn commit_change(
         .work(move |s| s.commit_review(&token, &selected, allow))
         .await?;
     Ok(Redirect::to("/review"))
+}
+
+#[derive(Template)]
+#[template(path = "recons.html")]
+struct ReconList {
+    csrf: String,
+    recons: Vec<crate::recon::ReconInfo>,
+}
+
+async fn recon_list(State(state): State<AppState>) -> Result<Html<String>> {
+    render(ReconList {
+        csrf: state.0.csrf.clone(),
+        recons: state.work(|s| s.recons()).await?,
+    })
+}
+
+#[derive(Template)]
+#[template(path = "recon.html")]
+struct ReconPage {
+    csrf: String,
+    summary: crate::recon::ReconSummary,
+}
+
+async fn recon_summary(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Html<String>> {
+    render(ReconPage {
+        csrf: state.0.csrf.clone(),
+        summary: state.work(move |s| s.recon_summary(id)).await?,
+    })
+}
+
+#[derive(Template)]
+#[template(path = "history.html")]
+struct HistoryPage {
+    id: i64,
+    events: Vec<crate::recon::HistoryEvent>,
+}
+
+async fn purchase_history(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Html<String>> {
+    render(HistoryPage {
+        id,
+        events: state.work(move |s| s.purchase_history(id)).await?,
+    })
 }

@@ -14,10 +14,11 @@ use crate::{
     importer::{self, Purchase},
 };
 
-const MIGRATIONS: [&str; 3] = [
+const MIGRATIONS: [&str; 4] = [
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_original_currency.sql"),
     include_str!("../migrations/0003_merchant_review.sql"),
+    include_str!("../migrations/0004_recon_handling.sql"),
 ];
 
 pub struct Store {

@@ -10,11 +10,11 @@
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
-  <header><a href="/" class="brand">Recon</a><nav><a href="/">Import</a><a href="/review">Review</a></nav><span>Offline · no payments</span></header>
+  <header><a href="/" class="brand">Recon</a><nav><a href="/">Import</a><a href="/review">Review</a><a href="/recons">Recons</a></nav><span>Offline · no payments</span></header>
   <main>
     <p id="request-error" role="alert" hidden></p>
     {% block content %}{% endblock %}
   </main>
-  <footer>Account choices are review decisions, not evidence of payment. Execution history is unknown.</footer>
+  <footer>Account choices alone are not evidence of funding. Handling history is explicit; Monzo execution is not available.</footer>
 </body>
 </html>

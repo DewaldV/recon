@@ -49,6 +49,26 @@ pub enum Change {
         rows: Vec<(i64, i64)>,
         account: String,
     },
+    Handling {
+        ids: Vec<i64>,
+        state: String,
+        reason: String,
+        reopen: bool,
+    },
+    CreateRecon {
+        name: String,
+    },
+    Membership {
+        ids: Vec<i64>,
+        recon_id: i64,
+        include: bool,
+        reason: String,
+    },
+    ReconStatus {
+        recon_id: i64,
+        status: String,
+        reason: String,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct DetailRow {
@@ -57,6 +77,7 @@ pub struct DetailRow {
     pub card: String,
     pub date: String,
     pub amount: String,
+    pub amount_pence: i64,
     pub account: String,
     pub version: i64,
     pub category: String,
@@ -65,6 +86,11 @@ pub struct DetailRow {
     pub category_source: String,
     pub description_source: String,
     pub conflict: bool,
+    pub handling: String,
+    pub handling_version: i64,
+    pub handling_reason: String,
+    pub active_recon_id: Option<i64>,
+    pub active_recon_name: String,
 }
 impl DetailRow {
     pub fn complete(&self) -> bool {
@@ -72,6 +98,36 @@ impl DetailRow {
             && !self.account.is_empty()
             && !self.category.is_empty()
             && !self.description.is_empty()
+    }
+    pub fn ready(&self) -> bool {
+        self.complete()
+            && matches!(self.account.as_str(), "personal" | "joint")
+            && self.handling == "outstanding"
+            && self.active_recon_id.is_some()
+            && self.amount_pence > 0
+    }
+    pub fn readiness(&self) -> &'static str {
+        match self.handling.as_str() {
+            "external" => "Handled externally · do not fund again",
+            "excluded" => "Excluded · not outstanding",
+            "unknown" => "Blocked · handling history unknown",
+            _ if self.conflict => "Blocked · source conflict",
+            _ if !self.complete() => "Blocked · missing account or merchant details",
+            _ if self.active_recon_id.is_none() => "Blocked · no active recon selection",
+            _ => "Outstanding-ready · not payment approval",
+        }
+    }
+    pub fn ready_in(&self, recon_id: Option<i64>) -> bool {
+        self.ready() && recon_id.is_none_or(|id| self.active_recon_id == Some(id))
+    }
+    pub fn readiness_in(&self, recon_id: &Option<i64>) -> &'static str {
+        if self.handling == "outstanding"
+            && recon_id.is_some_and(|id| self.active_recon_id != Some(id))
+        {
+            "Blocked · selected recon is not the active scope"
+        } else {
+            self.readiness()
+        }
     }
 }
 #[derive(Default, Clone, Deserialize)]
@@ -86,7 +142,14 @@ pub struct Filters {
     pub view: String,
     #[serde(default, deserialize_with = "optional_import")]
     pub import_id: Option<i64>,
+    #[serde(default, deserialize_with = "optional_import")]
+    pub recon_id: Option<i64>,
     pub page: Option<usize>,
+}
+impl Filters {
+    pub fn selected_recon(&self, recon: &crate::recon::ReconInfo) -> bool {
+        self.recon_id == Some(recon.id)
+    }
 }
 fn optional_import<'de, D: serde::Deserializer<'de>>(
     d: D,
@@ -109,6 +172,7 @@ pub struct ReviewPage {
     pub pages: usize,
     pub groups: Vec<(String, usize)>,
     pub categories: Vec<String>,
+    pub recons: Vec<crate::recon::ReconInfo>,
 }
 pub struct Preview {
     pub token: String,
@@ -130,6 +194,7 @@ impl Store {
                     card: r.get(2)?,
                     date: r.get(3)?,
                     amount: format!("{}.{:02}", amount / 100, amount % 100),
+                    amount_pence: amount,
                     account: r.get(5)?,
                     version: r.get(6)?,
                     category: r.get(7)?,
@@ -138,6 +203,11 @@ impl Store {
                     details_version: r.get(10)?,
                     category_source: String::new(),
                     description_source: String::new(),
+                    handling: "unknown".into(),
+                    handling_version: 0,
+                    handling_reason: String::new(),
+                    active_recon_id: None,
+                    active_recon_name: String::new(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -169,6 +239,7 @@ impl Store {
                 }
             }
         }
+        self.enrich_handling(&mut rows)?;
         Ok(rows)
     }
     pub fn merchant_default(&self, merchant: &str) -> Result<(String, String)> {
@@ -199,16 +270,22 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
     pub fn review_page(&self, filter: &Filters) -> Result<ReviewPage> {
-        if !matches!(filter.view.as_str(), "" | "all" | "attention" | "complete")
-            || !matches!(filter.account.as_str(), "" | "unset" | "personal" | "joint")
+        if !matches!(
+            filter.view.as_str(),
+            "" | "all" | "attention" | "complete" | "ready" | "external" | "excluded" | "unknown"
+        ) || !matches!(filter.account.as_str(), "" | "unset" | "personal" | "joint")
             || !matches!(
                 filter.missing.as_str(),
-                "" | "account" | "category" | "description" | "conflict"
+                "" | "account" | "category" | "description" | "conflict" | "handling" | "recon"
             )
         {
             return Err(Error::Invalid("Invalid review filter.".into()));
         }
         let members:Option<BTreeSet<i64>>=filter.import_id.map(|id|->Result<_>{ Ok(self.db.prepare("SELECT purchase_id FROM source_observations WHERE import_id=?1 AND purchase_id IS NOT NULL")?.query_map([id],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?) }).transpose()?;
+        let recon_members = filter
+            .recon_id
+            .map(|id| self.recon_members(id))
+            .transpose()?;
         let rows: Vec<_> = self
             .detail_rows()?
             .into_iter()
@@ -221,9 +298,17 @@ impl Store {
                             r.account == filter.account
                         })
                     && members.as_ref().is_none_or(|m| m.contains(&r.id))
+                    && recon_members.as_ref().is_none_or(|m| m.contains(&r.id))
                     && match filter.view.as_str() {
-                        "attention" => !r.complete(),
+                        "attention" => {
+                            !matches!(r.handling.as_str(), "external" | "excluded")
+                                && !r.ready_in(filter.recon_id)
+                        }
                         "complete" => r.complete(),
+                        "ready" => r.ready_in(filter.recon_id),
+                        "external" => r.handling == "external",
+                        "excluded" => r.handling == "excluded",
+                        "unknown" => r.handling == "unknown",
                         _ => true,
                     }
                     && match filter.missing.as_str() {
@@ -231,6 +316,8 @@ impl Store {
                         "category" => r.category.is_empty(),
                         "description" => r.description.is_empty(),
                         "conflict" => r.conflict,
+                        "handling" => r.handling == "unknown",
+                        "recon" => r.active_recon_id.is_none(),
                         _ => true,
                     }
             })
@@ -255,6 +342,7 @@ impl Store {
             pages,
             groups: groups.into_iter().collect(),
             categories: self.categories()?,
+            recons: self.recons()?,
         })
     }
     pub fn parse_catalogue(filename: String, bytes: Vec<u8>) -> Result<Change> {
@@ -369,6 +457,7 @@ impl Store {
                     return Err(Error::Invalid("Alias needs a new exact name and an existing direct merchant default; chains and conflicting definitions are not allowed.".into()));
                 }
             }
+            _ => self.validate_recon_change(change)?,
         }
         Ok(())
     }
@@ -465,6 +554,11 @@ impl Store {
             }
             Change::Details { ids: selected, .. } => ids.extend(selected),
             Change::Accounts { rows, .. } => ids.extend(rows.iter().map(|r| r.0)),
+            Change::Handling { ids: selected, .. } | Change::Membership { ids: selected, .. } => {
+                ids.extend(selected)
+            }
+            Change::CreateRecon { .. } => {}
+            Change::ReconStatus { recon_id, .. } => ids.extend(self.recon_members(*recon_id)?),
         }
         let affected: Vec<_> = self
             .detail_rows()?
@@ -606,6 +700,7 @@ impl Store {
                     tx.execute("INSERT INTO review_decisions(purchase_id,version,account) VALUES(?1,?2,?3)",params![id,version+1,clean(&account)])?;
                 }
             }
+            other => Store::apply_recon_change(&tx, other)?,
         }
         tx.execute(
             "UPDATE review_previews SET committed=1,committed_at=CURRENT_TIMESTAMP WHERE token=?1",
