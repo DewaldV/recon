@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ row.merchant }}</h1><p>{{ row.date }} · £{{ row.amount }} · Card {{ row.card }} · <span class="badge">{{ row.queue_status() }}</span></p>
+<form method="post" action="/review/{{ row.id }}/edit" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="signature" value="{{ row.signature() }}"><input type="hidden" name="return_to" value="{{ return_to }}">
+  <fieldset {% if row.conflict || row.in_run %}disabled{% endif %}><legend>Purchase details</legend>
+    <label>Account <select name="account"><option value="">Use rule / unset</option><option value="personal" {% if row.account == "personal" %}selected{% endif %}>Personal</option><option value="joint" {% if row.account == "joint" %}selected{% endif %}>Joint</option></select></label><p class="muted">{{ row.account_source }} · <a href="/rules?merchant={{ row.merchant|urlencode }}&amp;card={{ row.card|urlencode }}">Remember an account rule</a></p>
+    <label>Category <input name="category" value="{{ row.category }}" list="categories" maxlength="200"></label><small class="reference">{{ row.category_source }}</small><label><input type="checkbox" name="use_category_default"> Use merchant category default</label>
+    <label>Description / Monzo note <textarea name="description" maxlength="4000">{{ row.description }}</textarea></label><small class="reference">{{ row.description_source }}</small><label><input type="checkbox" name="use_description_default"> Use merchant description default</label>
+    <label><input type="checkbox" name="allow_category"> Add this category if it is new</label>
+    <p><a href="/merchants?q={{ row.merchant|urlencode }}">Edit merchant defaults</a></p>
+    <p>Staging confirms this purchase still needs funding and these details are correct.</p>
+    <button name="action" value="stage">Save and stage</button> <button name="action" value="save" class="secondary">Save for later</button>
+  </fieldset><a href="{{ return_to }}">Return to review</a>
+</form>
+<datalist id="categories">{% for name in categories %}<option value="{{ name }}">{% endfor %}</datalist>
+<details><summary>Source and decision history</summary><p>Reference: {{ reference }} · Posted: {{ posting }}</p><ul>{% for (id,name) in imports %}<li><a href="/imports/{{ id }}">{{ name }} · Import #{{ id }}</a></li>{% endfor %}</ul><a href="/review/{{ row.id }}/history">Decision history</a></details>
+{% endblock %}

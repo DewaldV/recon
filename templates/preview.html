@@ -11,13 +11,18 @@
 {% if !account.is_empty() %}<p>New account: <strong>{{ account }}</strong></p>{% endif %}
 <p>{{ data.affected.len() }} potentially affected purchases. {{ data.preserved }} purchases have explicit overrides; merchant default and alias changes preserve them. Selected override changes replace both override fields.</p>
 <form method="post" action="/review/previews/{{ data.token }}/commit"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if !data.historical.is_empty() %}
+{% if data.duplicate %}<p>This historical source was already imported. Confirmation is a no-op.</p>{% endif %}
+<div class="table-scroll"><table><thead><tr><th>Source record / matched purchase</th><th>Proposed account</th><th>Proposed details</th><th>Legacy evidence</th></tr></thead><tbody>{% for row in data.historical %}<tr><td>{{ row.record }} → purchase #{{ row.purchase_id }}</td><td>{{ row.account }}</td><td>{{ row.category }} · {{ row.description }}</td><td>{% if row.external %}Paid = Yes · handled externally{% else %}No confirmation of funding status{% endif %}<small class="reference">{{ row.reason }}</small></td></tr>{% endfor %}</tbody></table></div>
+<label><input type="checkbox" name="allow_categories"> Approve new categories from this historical source.</label>
+{% endif %}
 {% if catalogue %}
 <p>Identical definitions are coalesced. For conflicts, explicitly choose at most one row per normalized merchant. Leaving all rows for a merchant unchecked skips it. The purchase list below includes every merchant in this upload; only checked definitions are applied. Incomplete definitions retain missing fields.</p>
 {% if data.duplicate %}<p>This file was already imported. Committing is a no-op and preserves later edits.</p>{% endif %}
 <div class="table-scroll"><table><thead><tr><th>Apply</th><th>Record</th><th>Merchant</th><th>Category</th><th>Description</th><th>Status</th></tr></thead><tbody>{% for (row,status,selected) in data.catalogue %}<tr><td><input type="checkbox" name="record_{{ row.record }}" {% if selected %}checked{% endif %} {% if data.duplicate %}disabled{% endif %} aria-label="Apply record {{ row.record }}"></td><td>{{ row.record }}</td><td>{{ row.merchant }}</td><td>{{ row.category }}</td><td>{{ row.description }}</td><td>{{ status }}</td></tr>{% endfor %}</tbody></table></div>
 {% endif %}
-{% if operation.is_empty() %}<label><input type="checkbox" name="allow_categories"> Approve adding any new category values shown above to the local category catalogue. Case/whitespace variants use the existing category.</label>{% endif %}
-<button>Confirm changes</button> <a href="/review">Cancel</a>
+{% if operation.is_empty() && account.is_empty() && target.is_empty() %}<label><input type="checkbox" name="allow_categories"> Approve adding any new category values shown above to the local category catalogue. Case/whitespace variants use the existing category.</label>{% endif %}
+<button>Confirm changes</button> <a href="{{ data.return_to }}">Cancel</a>
 </form>
 <h2>Affected purchases (current values)</h2>
 <div class="table-scroll"><table><thead><tr><th>Purchase</th><th>Account</th><th>Category</th><th>Description</th><th>Current handling / scope</th></tr></thead><tbody>{% for row in data.affected %}<tr><td>#{{ row.id }} {{ row.date }} {{ row.merchant }} · £{{ row.amount }}{% if row.conflict %}<strong class="warning">Source conflict remains blocked</strong>{% endif %}</td><td>{{ row.account }}</td><td>{{ row.category }}<small class="reference">{{ row.category_source }}</small></td><td>{{ row.description }}<small class="reference">{{ row.description_source }}</small></td><td>{{ row.handling }}<small>{{ row.handling_reason }}</small><small>{{ row.active_recon_name }}</small></td></tr>{% else %}<tr><td colspan="5">No existing purchases affected.</td></tr>{% endfor %}</tbody></table></div>

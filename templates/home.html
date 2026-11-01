@@ -13,4 +13,8 @@
 </section>
 <h2>Recent imports</h2>
 <ul>{% for (id, filename) in imports %}<li><a href="/imports/{{ id }}">{{ filename }}</a> <span class="muted">#{{ id }}</span></li>{% else %}<li>No imports yet.</li>{% endfor %}</ul>
+<details class="panel"><summary>One-time historical decisions</summary>
+  <p>Prepare a read-only export with <code>Reference,Account,Category,Description,Paid,Reason</code>. Verify each reference against the original Virgin export; rows without verified matches must be resolved first. Up to 100 purchases per file. Paid uses Yes/No; No is not proof of outstanding funding.</p>
+  <form method="post" action="/history/import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Historical CSV <input name="file" type="file" accept=".csv,text/csv" required></label><button>Preview historical decisions</button></form>
+</details>
 {% endblock %}

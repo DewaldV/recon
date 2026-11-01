@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><h1>Recon history</h1><a class="button" href="/run">Next recon</a></div>
+<ul>{% for run in runs %}<li><a href="/runs/{{ run.id }}">Recon #{{ run.id }}</a> · {{ run.created_at }} · {{ run.status }} · {{ run.operations.len() }} purchases</li>{% else %}<li>No recon runs yet. Review and stage your purchases to start.</li>{% endfor %}</ul>
+{% if !legacy.is_empty() %}<details><summary>Legacy workspace selections</summary><p>Read-only selection history from the previous workflow.</p><ul>{% for recon in legacy %}<li><a href="/recons/{{ recon.id }}">{{ recon.name }}</a></li>{% endfor %}</ul></details>{% endif %}
+{% endblock %}

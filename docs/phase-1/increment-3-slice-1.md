@@ -1,5 +1,9 @@
 # Increment 3 / Slice 1: Handling, recon scope, and totals
 
+> Historical delivery record. Named workspace actions have been replaced by a
+> single global queue and automatic run records. Existing workspaces are read-only.
+> For current usage and verification, see the [single-queue guide](../single-queue-workflow.md).
+
 Status: implemented and verified. Formatting, Clippy, and all 54 Rust tests pass.
 The expanded Firefox smoke test also passed after the user closed the existing
 app on port 7310: import, inline HTMX edits, merchant review, restart persistence,

@@ -19,7 +19,8 @@ devenv shell -- recon-dev
 `recon-check` runs formatting, Clippy with warnings denied, and all Rust tests.
 `recon-dev` watches/runs the app against `/tmp/opencode/recon-development`, never
 the regular default data directory. `recon-browser-check` builds the app, starts
-headless Firefox through geckodriver, and checks synthetic upload/edit/restart.
+headless Firefox through geckodriver, and checks synthetic upload/edit/restart,
+merchant defaults, account rules, staging, source dispositions, and run preview.
 Python and geckodriver come from devenv; Firefox must be installed or specified
 with `RECON_FIREFOX`. The smoke test uses temporary private data and cleans up its
 app/browser/driver processes. Ports 7310 and 4444 must be free.
@@ -68,9 +69,10 @@ manual inspection.
 
 ## Merchant review
 
-Use the Review navigation for catalogue CSV preview/import, grouped missing merchants,
-merchant defaults, exact aliases, purchase overrides, and bulk account allocation.
-See [Increment 2 usage](phase-1/increment-2-verification.md). New review mutations
+Use Merchants for catalogue CSV preview/import, grouped missing merchants,
+merchant defaults and aliases; use Account rules for allocation defaults and
+Review for purchase overrides, bulk edits and staging.
+See [current usage](single-queue-workflow.md). Bulk review mutations
 use ordinary authenticated forms and immutable server-side previews. Every commit
 checks the global review revision; any intervening source/review change requires
 a fresh preview. This intentionally rejects even unrelated concurrent changes.
@@ -91,12 +93,32 @@ With the app stopped:
 cargo run -- --backup
 ```
 
-For restore, keep the original data directory untouched and create a new private
-local directory (0700). Copy one verified snapshot into it as `recon.sqlite3`,
-restrict the file to 0600, then start Recon with `--data-dir` pointing at that
-directory. Startup verifies SQLite integrity, foreign keys, and supported schema
-version before serving the UI. Confirm imports and decisions before switching
-regular use to the restored directory. The Rust suite exercises snapshot/restore.
+### Execution recovery record
 
-Payment-state reconciliation after restoring a stale backup remains a Phase 2
-prerequisite. This app has no payment operations to replay in Increment 1.
+`execution.guard` is a private, fsynced watermark of the latest execution event
+and operation identity. It is written before sending a deposit or note mutation
+and after recording its result. It is outside SQLite so restoring an older
+database cannot silently erase knowledge of submitted operations. The CLI backup
+creates a SQLite snapshot only: preserve the **latest** recovery record separately,
+and retain the original data directory. Do not roll the recovery record back to
+match an old snapshot.
+
+With the app stopped, create a new private local directory (0700), copy a verified
+snapshot as `recon.sqlite3`, and copy the latest `execution.guard` from the original
+data directory. Restrict both files to 0600. Start with `--data-dir` pointing there.
+Startup verifies SQLite integrity, foreign keys, and supported schema. Confirm
+imports, run instructions and results before switching regular use to the restore.
+
+A missing guard on an execution-capable database, a guard newer than the database,
+or a mismatched operation identity blocks all execution. Review/history remains
+available. Prefer a newer complete database containing those operations. If none
+exists, bank outcomes and original operation/deduplication identities must be
+reconciled before recovery; there is currently no supported automated ledger-repair
+or guard-reset command. Do not delete/edit the guard to bypass the block.
+
+The guard cannot detect simultaneous loss/rollback of both files, nor knowledge
+of later payments when an old pre-execution schema is migrated as a new directory.
+Such restores need external bank reconciliation; never treat an old backup as a
+new payable queue. Missing financial evidence cannot be reconstructed from totals.
+Tests cover readable database-only restores, rejection of stale snapshots, and
+matching current database/guard restores.

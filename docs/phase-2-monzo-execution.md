@@ -1,5 +1,12 @@
 # Phase 2: Safe Monzo execution
 
+> Current implementation: immutable single-queue runs, temporary token entry,
+> preflight, stable deposit keys, persisted recovery, and explicit transaction
+> matching for notes are implemented and covered by synthetic/mock tests. This
+> document retains the original work packages; automatic correlation, exports,
+> automated recovery repair and live acceptance remain outstanding. See the
+> [current guide](single-queue-workflow.md) and D026–D029.
+
 ## Outcome
 
 Approve and execute deposits for both accounts, with persistent progress and
@@ -17,7 +24,7 @@ safe recovery. Keep one deposit and descriptive note per purchase.
 
 - Inspect the underlying Monzo Rust client's deposit implementation; ensure callers
   can provide a persistent `dedupe_id`, or implement that endpoint directly.
-- Inject credentials through `pass-cli run`; require them only for online work.
+- Accept a temporary token for each online attempt; keep it in backend memory only.
 - Import existing pot-name mappings, resolve and persist account/pot IDs, and
   validate each pot belongs to the intended source account.
 - Validate positive integer-penny amounts, supported currency, row readiness,

@@ -14,16 +14,19 @@ use crate::{
     importer::{self, Purchase},
 };
 
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_original_currency.sql"),
     include_str!("../migrations/0003_merchant_review.sql"),
     include_str!("../migrations/0004_recon_handling.sql"),
+    include_str!("../migrations/0005_single_queue.sql"),
+    include_str!("../migrations/0006_runs.sql"),
+    include_str!("../migrations/0007_historical_decisions.sql"),
 ];
 
 pub struct Store {
     pub(crate) db: Connection,
-    directory: PathBuf,
+    pub(crate) directory: PathBuf,
     _lock: File,
 }
 
@@ -58,12 +61,22 @@ pub struct ImportSummary {
 
 #[derive(Debug)]
 pub struct Exception {
+    pub id: i64,
     pub record_number: i64,
     pub disposition: String,
     pub reason: String,
+    pub source_text: String,
+    pub resolution: String,
 }
 
 impl Store {
+    /// The closure may read effective fields as well as write; RAII rolls back every error path.
+    pub(crate) fn atomic<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let tx = rusqlite::Transaction::new_unchecked(&self.db, TransactionBehavior::Immediate)?;
+        let result = f(self)?;
+        tx.commit()?;
+        Ok(result)
+    }
     pub fn open(directory: &Path) -> Result<Self> {
         config::private_directory(directory)?;
         let lock = config::private_file(&directory.join("recon.lock"))?;
@@ -113,6 +126,9 @@ impl Store {
             tx.commit()?;
         }
         store.db.execute("INSERT OR IGNORE INTO source_accounts (provider, account_key) VALUES ('virgin', 'virgin-primary')", [])?;
+        if version < 6 && !directory.join("execution.guard").exists() {
+            store.write_execution_guard()?;
+        }
         Ok(store)
     }
 
@@ -219,12 +235,15 @@ impl Store {
             .ok_or(Error::NotFound)?;
         let mut counts = BTreeMap::new();
         let mut exceptions = Vec::new();
-        let mut stmt = self.db.prepare("SELECT record_number, disposition, coalesce(reason, '') FROM source_observations WHERE import_id=?1 ORDER BY record_number")?;
+        let mut stmt = self.db.prepare("SELECT o.record_number,o.disposition,coalesce(o.reason,''),o.id,o.source_text,coalesce(e.reason,'') FROM source_observations o LEFT JOIN exception_decisions e ON e.observation_id=o.id WHERE import_id=?1 ORDER BY record_number")?;
         let records = stmt.query_map([id], |r| {
             Ok(Exception {
                 record_number: r.get(0)?,
                 disposition: r.get(1)?,
                 reason: r.get(2)?,
+                id: r.get(3)?,
+                source_text: r.get::<_, String>(4)?.chars().take(2000).collect(),
+                resolution: r.get(5)?,
             })
         })?;
         let mut total = 0;
@@ -275,9 +294,11 @@ impl Store {
     }
 
     pub fn decide(&mut self, id: i64, expected: i64, account: &str) -> Result<PurchaseRow> {
+        self.execution_editable(&[id])?;
         if !matches!(account, "" | "personal" | "joint") {
             return Err(Error::Invalid("Choose unset, Personal, or Joint.".into()));
         }
+        self.backup()?;
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -309,7 +330,7 @@ impl Store {
     }
 }
 
-const ROW_QUERY: &str = "SELECT p.id, p.reference, p.transaction_date, p.amount_pence, p.merchant, p.card_used, coalesce(d.account, ''), coalesce(d.version, 0), EXISTS(SELECT 1 FROM source_observations o WHERE o.purchase_id=p.id AND o.disposition='conflict') FROM purchases p LEFT JOIN current_account_decisions d ON d.purchase_id=p.id";
+const ROW_QUERY: &str = "SELECT p.id, p.reference, p.transaction_date, p.amount_pence, p.merchant, p.card_used, coalesce(d.account, ''), coalesce(d.version, 0), EXISTS(SELECT 1 FROM source_observations o WHERE o.purchase_id=p.id AND o.disposition='conflict' AND NOT EXISTS(SELECT 1 FROM exception_decisions e WHERE e.observation_id=o.id)) FROM purchases p LEFT JOIN current_account_decisions d ON d.purchase_id=p.id";
 
 fn map_purchase(r: &rusqlite::Row<'_>) -> rusqlite::Result<PurchaseRow> {
     let pennies: i64 = r.get(3)?;

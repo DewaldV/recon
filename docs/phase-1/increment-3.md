@@ -1,10 +1,10 @@
 # Phase 1 / Increment 3: Historical handling, account rules, and recon totals
 
-Status: in progress. [Slice 1](increment-3-slice-1.md) implements handling states,
-explicit recon scope, and readiness totals, with Rust checks and Firefox browser
-smoke testing passing. Historical migration, exception resolution, account rules,
-and compatibility exports remain planned. Depends on [Increment 2](increment-2.md)
-and the existing identity/ledger safeguards.
+Status: superseded by the [single-queue workflow](../single-queue-workflow.md)
+and D026–D029. Handling, exact account rules, reference-matched historical import,
+source dispositions, versioned staging and online run/resume are implemented.
+Full source repair and compatibility exports remain deferred. The original
+offline/workspace scope below is retained as planning history, not current usage.
 
 ## Goal
 

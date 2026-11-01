@@ -1,5 +1,12 @@
 # Recon implementation plans
 
+## Current implementation
+
+Use the [single-queue workflow guide](single-queue-workflow.md) for current behavior,
+verification, and limitations. The original phase/increment documents below retain
+their planning context. Named workspaces and `pass-cli` injection have been
+superseded by one queue, automatically recorded runs, and temporary token entry.
+
 ## Objective
 
 Replace the spreadsheet preparation workflow with an exception-based local app:
@@ -22,12 +29,14 @@ Virgin-app export and Proton Drive transfer remain manual initially.
   [decision log](decisions.md) and [alternatives](frontend-options.md).
 - Local-only by default; financial data and secrets stay off hosted services.
 - Offline import/review needs no Monzo token.
-- Monzo credentials stay in the backend, injected through `pass-cli run` when
-  needed. Do not store them in the database, browser storage, or logs.
+- The user enters a temporary Monzo token when running/resuming or repairing a note.
+  Requests use it in backend memory; it is not persisted in the database, browser
+  storage, or logs. Each attempt needs credentials again.
 - Categories are local reporting data: the documented Monzo API does not expose
   category updates. Descriptions can become transaction notes.
 - Preserve one deposit per purchase rather than aggregating by account.
-- No money movement in Phase 1, including through a hidden UI action.
+- Import/review remains offline. The explicit Run recon action now implements
+  online execution; live acceptance is still outstanding.
 
 ## Proposed architecture
 

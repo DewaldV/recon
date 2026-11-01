@@ -1,5 +1,10 @@
 # Phase 1: Offline import and review
 
+> Historical plan: the current implementation also includes single-queue staging,
+> account rules, reference-matched historical import and online execution. See
+> [current workflow and limitations](single-queue-workflow.md). Named workspace
+> selection has been superseded; full source repair and exports remain deferred.
+
 ## Outcome
 
 Import CSVs into a persistent ledger, reuse known decisions, and display a review

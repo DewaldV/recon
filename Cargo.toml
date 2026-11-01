@@ -12,13 +12,16 @@ clap = { version = "4", features = ["derive"] }
 csv = "1"
 fs2 = "0.4"
 getrandom = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_urlencoded = "0.7"
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+zeroize = "1"
 
 [dev-dependencies]
 http-body-util = "0.1"

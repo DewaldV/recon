@@ -26,6 +26,11 @@ pub struct CatalogueRow {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Change {
+    Historical {
+        filename: String,
+        bytes: Vec<u8>,
+        rows: Vec<crate::history_import::HistoricalRow>,
+    },
     Catalogue {
         filename: String,
         bytes: Vec<u8>,
@@ -69,6 +74,19 @@ pub enum Change {
         status: String,
         reason: String,
     },
+    Staging {
+        rows: Vec<(i64, String)>,
+        staged: bool,
+    },
+    AccountRule {
+        merchant: String,
+        card: String,
+        account: String,
+    },
+    Exception {
+        observation_id: i64,
+        reason: String,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct DetailRow {
@@ -91,6 +109,10 @@ pub struct DetailRow {
     pub handling_reason: String,
     pub active_recon_id: Option<i64>,
     pub active_recon_name: String,
+    pub account_source: String,
+    pub staged: bool,
+    pub in_run: bool,
+    pub source_version: i64,
 }
 impl DetailRow {
     pub fn complete(&self) -> bool {
@@ -132,6 +154,8 @@ impl DetailRow {
 }
 #[derive(Default, Clone, Deserialize)]
 pub struct Filters {
+    #[serde(default, deserialize_with = "optional_import")]
+    pub import_notice: Option<i64>,
     #[serde(default)]
     pub q: String,
     #[serde(default)]
@@ -147,6 +171,32 @@ pub struct Filters {
     pub page: Option<usize>,
 }
 impl Filters {
+    pub fn selected_import(&self, id: &i64) -> bool {
+        self.import_id == Some(*id)
+    }
+    pub fn validate(&self) -> Result<()> {
+        if !matches!(
+            self.view.as_str(),
+            "" | "all"
+                | "attention"
+                | "complete"
+                | "ready"
+                | "external"
+                | "excluded"
+                | "unknown"
+                | "staged"
+                | "outstanding"
+                | "history"
+        ) || !matches!(self.account.as_str(), "" | "unset" | "personal" | "joint")
+            || !matches!(
+                self.missing.as_str(),
+                "" | "account" | "category" | "description" | "conflict" | "handling" | "recon"
+            )
+        {
+            return Err(Error::Invalid("Invalid review filter.".into()));
+        }
+        Ok(())
+    }
     pub fn selected_recon(&self, recon: &crate::recon::ReconInfo) -> bool {
         self.recon_id == Some(recon.id)
     }
@@ -173,6 +223,9 @@ pub struct ReviewPage {
     pub groups: Vec<(String, usize)>,
     pub categories: Vec<String>,
     pub recons: Vec<crate::recon::ReconInfo>,
+    pub queue: crate::queue::QueueSummary,
+    pub imports: Vec<(i64, String)>,
+    pub active_run: Option<i64>,
 }
 pub struct Preview {
     pub token: String,
@@ -181,10 +234,12 @@ pub struct Preview {
     pub preserved: usize,
     pub catalogue: Vec<(CatalogueRow, String, bool)>,
     pub duplicate: bool,
+    pub return_to: String,
+    pub historical: Vec<crate::history_import::HistoricalRow>,
 }
 impl Store {
     pub fn detail_rows(&self) -> Result<Vec<DetailRow>> {
-        let mut stmt=self.db.prepare("SELECT p.id,p.merchant,p.card_used,p.transaction_date,p.amount_pence,coalesce(a.account,''),coalesce(a.version,0),coalesce(d.category,''),coalesce(d.description,''),EXISTS(SELECT 1 FROM source_observations o WHERE o.purchase_id=p.id AND o.disposition='conflict'),coalesce(d.version,0) FROM purchases p LEFT JOIN current_account_decisions a ON a.purchase_id=p.id LEFT JOIN current_details d ON d.purchase_id=p.id ORDER BY p.transaction_date DESC,p.id DESC")?;
+        let mut stmt=self.db.prepare("SELECT p.id,p.merchant,p.card_used,p.transaction_date,p.amount_pence,coalesce(a.account,''),coalesce(a.version,0),coalesce(d.category,''),coalesce(d.description,''),EXISTS(SELECT 1 FROM source_observations o WHERE o.purchase_id=p.id AND o.disposition='conflict' AND NOT EXISTS(SELECT 1 FROM exception_decisions e WHERE e.observation_id=o.id)),coalesce(d.version,0),coalesce((SELECT max(e.id) FROM exception_decisions e JOIN source_observations o ON o.id=e.observation_id WHERE o.purchase_id=p.id),0) FROM purchases p LEFT JOIN current_account_decisions a ON a.purchase_id=p.id LEFT JOIN current_details d ON d.purchase_id=p.id ORDER BY p.transaction_date DESC,p.id DESC")?;
         let mut rows = stmt
             .query_map([], |r| {
                 let amount: i64 = r.get(4)?;
@@ -208,6 +263,10 @@ impl Store {
                     handling_reason: String::new(),
                     active_recon_id: None,
                     active_recon_name: String::new(),
+                    account_source: String::new(),
+                    staged: false,
+                    in_run: false,
+                    source_version: r.get(11)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -232,7 +291,7 @@ impl Store {
                     *source = if field.is_empty() {
                         "missing".into()
                     } else {
-                        format!("merchant default v{version}")
+                        format!("merchant default v{version} · {key}")
                     };
                 } else {
                     *source = "missing".into();
@@ -240,6 +299,9 @@ impl Store {
             }
         }
         self.enrich_handling(&mut rows)?;
+        self.enrich_accounts(&mut rows)?;
+        self.enrich_execution(&mut rows)?;
+        self.enrich_staging(&mut rows)?;
         Ok(rows)
     }
     pub fn merchant_default(&self, merchant: &str) -> Result<(String, String)> {
@@ -255,7 +317,7 @@ impl Store {
     fn definitions(&self) -> Result<BTreeMap<String, (String, String, i64)>> {
         Ok(self.db.prepare("SELECT merchant_key,coalesce(category,''),coalesce(description,''),version FROM current_merchants")?.query_map([],|r| Ok((r.get(0)?,(r.get(1)?,r.get(2)?,r.get(3)?))))?.collect::<rusqlite::Result<_>>()?)
     }
-    fn aliases(&self) -> Result<BTreeMap<String, String>> {
+    pub(crate) fn aliases(&self) -> Result<BTreeMap<String, String>> {
         Ok(self
             .db
             .prepare("SELECT alias_key,target_key FROM merchant_aliases")?
@@ -272,7 +334,16 @@ impl Store {
     pub fn review_page(&self, filter: &Filters) -> Result<ReviewPage> {
         if !matches!(
             filter.view.as_str(),
-            "" | "all" | "attention" | "complete" | "ready" | "external" | "excluded" | "unknown"
+            "" | "all"
+                | "attention"
+                | "complete"
+                | "ready"
+                | "external"
+                | "excluded"
+                | "unknown"
+                | "staged"
+                | "outstanding"
+                | "history"
         ) || !matches!(filter.account.as_str(), "" | "unset" | "personal" | "joint")
             || !matches!(
                 filter.missing.as_str(),
@@ -286,8 +357,10 @@ impl Store {
             .recon_id
             .map(|id| self.recon_members(id))
             .transpose()?;
-        let rows: Vec<_> = self
-            .detail_rows()?
+        let all = self.detail_rows()?;
+        let queue =
+            crate::queue::QueueSummary::from_rows(&all, self.unresolved_exception_count()?)?;
+        let rows: Vec<_> = all
             .into_iter()
             .filter(|r| {
                 (filter.q.is_empty() || normalize(&r.merchant).contains(&normalize(&filter.q)))
@@ -300,10 +373,10 @@ impl Store {
                     && members.as_ref().is_none_or(|m| m.contains(&r.id))
                     && recon_members.as_ref().is_none_or(|m| m.contains(&r.id))
                     && match filter.view.as_str() {
-                        "attention" => {
-                            !matches!(r.handling.as_str(), "external" | "excluded")
-                                && !r.ready_in(filter.recon_id)
-                        }
+                        "attention" => r.outstanding() && !r.staged,
+                        "staged" => r.eligibility() == crate::queue::Eligibility::Staged,
+                        "outstanding" => r.outstanding(),
+                        "history" => !r.outstanding(),
                         "complete" => r.complete(),
                         "ready" => r.ready_in(filter.recon_id),
                         "external" => r.handling == "external",
@@ -343,6 +416,9 @@ impl Store {
             groups: groups.into_iter().collect(),
             categories: self.categories()?,
             recons: self.recons()?,
+            queue,
+            imports: self.recent_imports()?,
+            active_run: self.active_run()?,
         })
     }
     pub fn parse_catalogue(filename: String, bytes: Vec<u8>) -> Result<Change> {
@@ -408,7 +484,46 @@ impl Store {
     }
     fn validate_change(&self, change: &Change) -> Result<()> {
         match change {
-            Change::Catalogue { .. } => {}
+            Change::Historical { rows, .. } => self.validate_history(rows)?,
+            Change::Details { ids, .. } | Change::Handling { ids, .. } => {
+                self.execution_editable(ids)?
+            }
+            Change::Accounts { rows, .. } => {
+                self.execution_editable(&rows.iter().map(|r| r.0).collect::<Vec<_>>())?
+            }
+            Change::Staging { rows, .. } => {
+                self.execution_editable(&rows.iter().map(|r| r.0).collect::<Vec<_>>())?
+            }
+            _ => {}
+        }
+        match change {
+            Change::Staging { rows, staged } => self.validate_staging(rows, *staged)?,
+            Change::AccountRule {
+                merchant,
+                card,
+                account,
+            } => {
+                crate::rules::validate_rule(merchant, card, account)?;
+                if self.aliases()?.contains_key(&normalize(merchant)) {
+                    return Err(Error::Invalid(
+                        "Use the alias target's exact merchant name for account rules.".into(),
+                    ));
+                }
+            }
+            Change::Exception {
+                observation_id,
+                reason,
+            } => {
+                if reason.trim().is_empty() || reason.len() > 4000 {
+                    return Err(Error::Invalid(
+                        "Provide an exception disposition reason.".into(),
+                    ));
+                }
+                if !self.db.query_row("SELECT EXISTS(SELECT 1 FROM source_observations o WHERE id=?1 AND disposition NOT IN ('purchase','pending','payment') AND NOT EXISTS(SELECT 1 FROM exception_decisions e WHERE e.observation_id=o.id))", [observation_id], |r|r.get::<_,bool>(0))? {
+                    return Err(Error::Invalid("This observation does not need a disposition.".into()));
+                }
+            }
+            Change::Catalogue { .. } | Change::Historical { .. } => {}
             Change::Default {
                 merchant,
                 category,
@@ -504,7 +619,22 @@ impl Store {
         let mut duplicate = false;
         let mut keys = BTreeSet::new();
         let mut ids = BTreeSet::new();
+        let mut historical = Vec::new();
         match &change {
+            Change::Historical { bytes, rows, .. } => {
+                duplicate = self.db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM historical_sources WHERE sha256=?1)",
+                    [format!("{:x}", Sha256::digest(bytes))],
+                    |r| r.get(0),
+                )?;
+                ids.extend(rows.iter().map(|r| r.purchase_id));
+                historical = rows.clone();
+            }
+            Change::Staging { rows, .. } => ids.extend(rows.iter().map(|r| r.0)),
+            Change::AccountRule { merchant, .. } => {
+                keys.insert(normalize(merchant));
+            }
+            Change::Exception { .. } => {}
             Change::Catalogue { bytes, rows, .. } => {
                 duplicate = self.db.query_row(
                     "SELECT EXISTS(SELECT 1 FROM merchant_sources WHERE sha256=?1)",
@@ -584,6 +714,16 @@ impl Store {
             preserved,
             catalogue,
             duplicate,
+            historical,
+            return_to: self
+                .db
+                .query_row(
+                    "SELECT return_to FROM preview_context WHERE token=?1",
+                    [token],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or_else(|| "/review".into()),
         })
     }
     pub fn commit_review(
@@ -615,6 +755,39 @@ impl Store {
             return Err(Error::Stale);
         }
         match preview.change {
+            Change::Historical {
+                filename,
+                bytes,
+                rows,
+            } => {
+                if !preview.duplicate {
+                    crate::history_import::save_history(
+                        &tx,
+                        &filename,
+                        &bytes,
+                        &rows,
+                        &preview.affected,
+                        allow_categories,
+                    )?;
+                }
+            }
+            Change::Staging { staged, .. } => {
+                crate::queue::save_staging(&tx, &preview.affected, staged)?
+            }
+            Change::AccountRule {
+                merchant,
+                card,
+                account,
+            } => crate::rules::save_rule(&tx, &merchant, &card, &account)?,
+            Change::Exception {
+                observation_id,
+                reason,
+            } => {
+                tx.execute(
+                    "INSERT INTO exception_decisions(observation_id,reason) VALUES(?1,?2)",
+                    params![observation_id, reason.trim()],
+                )?;
+            }
             Change::Catalogue {
                 filename,
                 bytes,
@@ -720,8 +893,8 @@ fn validate_text(merchant: &str, category: &str, description: &str) -> Result<()
     }
     Ok(())
 }
-fn category_name(
-    tx: &rusqlite::Transaction<'_>,
+pub(crate) fn category_name(
+    tx: &rusqlite::Connection,
     value: &str,
     allow: bool,
 ) -> Result<Option<String>> {

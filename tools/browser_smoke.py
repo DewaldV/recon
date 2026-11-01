@@ -95,6 +95,8 @@ def run():
                 return call("POST", prefix + "/element", {"using": "css selector", "value": selector})[ELEMENT]
 
             def click(selector):
+                # Open disclosure controls just as a user would before clicking inside them.
+                execute("let node = document.querySelector(" + json.dumps(selector) + "); while (node) { if (node.tagName === 'DETAILS') node.open = true; node = node.parentElement; } return true")
                 call("POST", prefix + "/element/" + find(selector) + "/click", {})
 
             def navigate(url):
@@ -112,15 +114,18 @@ def run():
             wait("return !!document.querySelector('input[type=file]')")
             assert execute("return location.hash") == ""
             import_file()
-            click("a.button")
+            navigate("http://127.0.0.1:7310/review")
             wait("return !!document.querySelector('#review-1 select')")
             assert execute("return typeof htmx !== 'undefined' && !htmx.config.allowEval && !htmx.config.allowScriptTags")
             execute("window.reconSmokeMarker = 'no-navigation'; return true")
+            execute("document.querySelector('#bulk-review textarea[name=description]').value = 'Keep this draft'; return true")
             click("#review-1 option[value=personal]")
             click("#review-1 button")
             wait("return document.querySelector('#review-1 input[name=version]').value === '1'")
             assert execute("return window.reconSmokeMarker") == "no-navigation", "Expected HTMX update, not full-page fallback"
             assert execute("return document.querySelector('#review-1 select').value") == "personal"
+            assert execute("return document.querySelector('#bulk-review textarea[name=description]').value") == "Keep this draft"
+            assert execute("return document.activeElement.id") == "account-1"
             assert execute("return document.querySelector('#review-1 input[type=checkbox]').form.id") == "bulk-review"
             assert execute("return document.body.textContent.includes('missing account 1')")
             # Inline editing must refresh filter membership, not leave a stale row.
@@ -140,12 +145,12 @@ def run():
             navigate(url)
             wait("return !!document.querySelector('input[type=file]')")
             import_file()
-            click("a.button")
+            navigate("http://127.0.0.1:7310/review")
             wait("return document.querySelector('#review-1 select')?.value === 'personal'")
             assert execute("return document.querySelectorAll('tr[id^=review-]').length") == 2
             # Increment 2: catalogue preview, coalescing, bulk review, and overrides.
-            navigate("http://127.0.0.1:7310/review")
-            wait("return document.body.textContent.includes('2 distinct purchases')")
+            navigate("http://127.0.0.1:7310/merchants")
+            wait("return !!document.querySelector('form[action=\"/review/catalogue\"]')")
             field = find("form[action='/review/catalogue'] input[type=file]")
             catalogue_path = str(ROOT / "tests/fixtures/merchants.csv")
             call("POST", prefix + "/element/" + field + "/value", {"text": catalogue_path})
@@ -154,6 +159,7 @@ def run():
             assert execute("return document.querySelectorAll('input[name^=record_]:checked').length") == 2
             click("input[name=allow_categories]")
             click("form button")
+            navigate("http://127.0.0.1:7310/review")
             wait("return document.body.textContent.includes('Synthetic groceries 🛍️')")
             click("#review-1 input[type=checkbox]")
             click("#review-2 input[type=checkbox]")
@@ -169,11 +175,12 @@ def run():
             wait("return document.body.textContent.includes('Explicit override 🧾')")
             click("form button")
             wait("return document.querySelector('#review-1').textContent.includes('Explicit override 🧾')")
-            navigate("http://127.0.0.1:7310/review?q=SYNTHETIC%20SHOP")
+            navigate("http://127.0.0.1:7310/merchants?q=SYNTHETIC%20SHOP")
             execute("document.querySelector('input[value=default]').form.querySelector('textarea').value = 'Changed default'; return true")
-            click("input[value=default] + label + label + label + button")
+            click("#merchant-default button")
             wait("return document.body.textContent.includes('1 purchases have explicit overrides')")
             click("form button")
+            navigate("http://127.0.0.1:7310/review")
             wait("return document.querySelector('#review-2').textContent.includes('Changed default')")
             assert execute("return document.querySelector('#review-1').textContent.includes('Explicit override 🧾')")
             click("#review-1 input[type=checkbox]")
@@ -188,20 +195,15 @@ def run():
             navigate("http://127.0.0.1:7310/review?view=complete")
             wait("return document.body.textContent.includes('2 distinct purchases')")
             assert execute("return document.querySelector('#review-1').textContent.includes('Changed default')")
-            # Increment 3 slice 1: explicit scope and externally handled work.
-            navigate("http://127.0.0.1:7310/recons")
-            execute("document.querySelector('input[name=name]').value = 'Synthetic October'; return true")
+            navigate("http://127.0.0.1:7310/rules?merchant=SYNTHETIC%20SHOP")
+            execute("document.querySelector('select[name=account]').value = 'personal'; return true")
             click("form button")
-            wait("return document.body.textContent.includes('Create recon workspace')")
+            wait("return document.body.textContent.includes('Approve account rule')")
             click("form button")
-            wait("return !!document.querySelector('#review-1')")
-            click("#review-1 input[type=checkbox]")
-            click("#review-2 input[type=checkbox]")
-            execute("document.querySelector('#bulk-review select[name=recon_id]').value = '1'; document.querySelector('#bulk-review textarea[name=reason]').value = 'Synthetic explicit October selection'; return true")
-            click("button[value=membership_add]")
-            wait("return document.body.textContent.includes('Change explicit recon selection')")
-            click("form button")
-            wait("return !!document.querySelector('#review-1')")
+            wait("return location.pathname === '/rules'")
+            assert execute("return document.querySelector('tbody').textContent.includes('personal')")
+            # One global queue: external funding, staging, source dispositions, and final preview.
+            navigate("http://127.0.0.1:7310/review?view=all")
             click("#review-1 input[type=checkbox]")
             execute("document.querySelector('#bulk-review select[name=handling]').value = 'external'; document.querySelector('#bulk-review textarea[name=reason]').value = 'Synthetic partner already funded the pot'; return true")
             click("button[value=handling]")
@@ -209,23 +211,41 @@ def run():
             click("form button")
             wait("return document.querySelector('#review-1').textContent.includes('Handled externally')")
             click("#review-2 input[type=checkbox]")
-            execute("document.querySelector('#bulk-review select[name=handling]').value = 'outstanding'; document.querySelector('#bulk-review textarea[name=reason]').value = 'Synthetic outstanding confirmation'; return true")
-            click("button[value=handling]")
-            wait("return document.body.textContent.includes('Set purchase handling state')")
+            click("button[value=stage]")
+            wait("return document.body.textContent.includes('Stage reviewed purchases')")
             click("form button")
-            wait("return document.querySelector('#review-2').textContent.includes('Outstanding-ready')")
-            navigate("http://127.0.0.1:7310/recons/1")
-            assert execute("return document.querySelector('#personal-total').textContent.includes('1 purchases · £12.34')")
+            wait("return document.querySelector('#review-2').textContent.includes('Staged')")
+            assert execute("return location.search.includes('view=all')"), "Bulk confirmation retains filters"
+            click("#review-2 input[type=checkbox]")
+            click("button[value=unstage]")
+            wait("return document.body.textContent.includes('Return purchases to review')")
+            click("form button")
+            wait("return !!document.querySelector('#review-2')")
+            navigate("http://127.0.0.1:7310/review/2/edit?view=all")
+            execute("document.querySelector('textarea[name=description]').value = 'Individually reviewed note'; return true")
+            click("button[value=stage]")
+            wait("return document.querySelector('#review-2')?.textContent.includes('Staged')")
+            assert execute("return document.querySelector('#review-2').textContent.includes('Individually reviewed note')")
+            navigate("http://127.0.0.1:7310/run")
+            assert execute("return document.body.textContent.includes('£12.34') && !document.querySelector('input[name=token]')")
+            navigate("http://127.0.0.1:7310/imports/1")
+            execute("document.querySelector('textarea[name=reason]').value = 'Synthetic exception explicitly excluded from funding'; return true")
+            click("form button")
+            wait("return document.body.textContent.includes('Confirm source exception disposition')")
+            click("form button")
+            navigate("http://127.0.0.1:7310/run")
+            assert execute("return !!document.querySelector('input[name=token]') && document.body.textContent.includes('Confirm and run recon')")
+            # Never submit a token or invoke a financial endpoint in browser checks.
             stop(app)
             app, url = start_app(data)
             navigate(url)
             wait("return !!document.querySelector('input[type=file]')")
-            navigate("http://127.0.0.1:7310/recons/1")
-            assert execute("return document.querySelector('#personal-total').textContent.includes('1 purchases · £12.34')")
-            navigate("http://127.0.0.1:7310/review?recon_id=1&view=ready")
+            navigate("http://127.0.0.1:7310/run")
+            assert execute("return document.body.textContent.includes('£12.34')")
+            navigate("http://127.0.0.1:7310/review?view=staged")
             wait("return document.body.textContent.includes('1 distinct purchases')")
             assert execute("return !document.querySelector('#review-1') && !!document.querySelector('#review-2')")
-            print("Browser smoke passed: import, HTMX edits, merchant review, restart, explicit recon scope, external handling, and outstanding-ready totals.")
+            print("Browser smoke passed: import, draft/focus preservation, merchant review, account rules, bulk and individual staging, external handling, source dispositions, run preview, and restart.")
         finally:
             if session:
                 try:

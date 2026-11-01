@@ -8,7 +8,7 @@ use recon::{
 };
 
 #[derive(Parser)]
-#[command(about = "Local, offline Virgin credit-card reconciliation. No Monzo execution.")]
+#[command(about = "Local Virgin credit-card review, staging, and resumable Monzo reconciliation.")]
 struct Args {
     /// Private local directory outside the repository and cloud-sync folders.
     #[arg(long)]
@@ -48,7 +48,7 @@ async fn run() -> recon::Result<()> {
         })?;
     let state = AppState::new(store)?;
     println!(
-        "Recon is running locally. No money movement is available.\nOpen this private startup link in your browser:\n{}",
+        "Recon is running locally. Review is offline; execution needs a temporary Monzo token.\nOpen this private startup link in your browser:\n{}",
         state.startup_url()
     );
     axum::serve(listener, router(state))

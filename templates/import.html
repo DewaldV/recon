@@ -1,13 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Import #{{ summary.id }}</h1><p>{{ summary.filename }}</p>
-<p>{{ summary.total }} source records accounted for. Reuploading an identical file returns this same import.</p>
-<dl class="counts">{% for (kind, count) in summary.counts %}<div><dt>{{ kind }}</dt><dd>{{ count }}</dd></div>{% endfor %}</dl>
-<p><a class="button" href="/review">Review purchases</a></p>
-<p><a href="/review?import_id={{ summary.id }}">Review merchant details and bulk allocations for this import</a></p>
+<p>{{ summary.total }} source records accounted for. Identical uploads reuse this import.</p>
+<dl class="counts">{% for (kind,count) in summary.counts %}<div><dt>{{ kind }}</dt><dd>{{ count }}</dd></div>{% endfor %}</dl>
+<p><a class="button" href="/review">Review outstanding purchases</a> · <a href="/review?view=all&amp;import_id={{ summary.id }}">Inspect this import</a></p>
 <h2>Exceptions and non-purchases</h2>
-<p class="muted">Nothing here is silently discarded or automatically repaired. Resolution of these exceptions is outside this increment.</p>
-<div class="table-scroll"><table><thead><tr><th>CSV record</th><th>Disposition</th><th>Reason</th></tr></thead><tbody>
-{% for exception in summary.exceptions %}<tr><td>{{ exception.record_number }}</td><td>{{ exception.disposition }}</td><td>{{ exception.reason }}</td></tr>{% else %}<tr><td colspan="3">No exceptions.</td></tr>{% endfor %}
-</tbody></table></div>
+{% for exception in summary.exceptions %}
+<details class="panel"><summary>Record {{ exception.record_number }} · {{ exception.disposition }}{% if !exception.resolution.is_empty() %} · disposition recorded{% endif %}</summary>
+  <p>{{ exception.reason }}</p><pre class="source-excerpt">{{ exception.source_text }}</pre>
+  {% if !exception.resolution.is_empty() %}<p>Evidence: {{ exception.resolution }}</p>
+  {% else %}{% if exception.disposition != "pending" && exception.disposition != "payment" %}
+  <form method="post" action="/review/stage"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="exception"><input type="hidden" name="observation_id" value="{{ exception.id }}"><input type="hidden" name="return_to" value="/imports/{{ summary.id }}">
+    {% if exception.disposition == "conflict" %}<p>Confirm that the original canonical purchase is correct and this conflicting observation should not replace it.</p>{% else %}<p>Exclude this observation from funding only when the evidence supports that disposition. This does not create or repair a purchase.</p>{% endif %}
+    <label>Reason / evidence <textarea name="reason" required maxlength="4000"></textarea></label><button>Preview disposition</button>
+  </form>{% endif %}{% endif %}
+</details>
+{% else %}<p>No exceptions.</p>{% endfor %}
 {% endblock %}

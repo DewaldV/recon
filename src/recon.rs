@@ -150,10 +150,28 @@ impl Store {
         )? {
             return Err(Error::NotFound);
         }
-        Ok(self.db.prepare("SELECT created_at, 'handling (manual)', state || ' v' || version || CASE WHEN reopen_confirmed=1 THEN ' · reopening confirmed' ELSE '' END, reason FROM handling_decisions WHERE purchase_id=?1
+        let merchant: String =
+            self.db
+                .query_row("SELECT merchant FROM purchases WHERE id=?1", [id], |r| {
+                    r.get(0)
+                })?;
+        let key = normalize(&merchant);
+        let aliases = self.aliases()?;
+        let target = aliases.get(&key).unwrap_or(&key);
+        Ok(self.db.prepare("SELECT * FROM (SELECT created_at AS at, 'handling (manual)' AS kind, state || ' v' || version || CASE WHEN reopen_confirmed=1 THEN ' · reopening confirmed' ELSE '' END AS value, reason FROM handling_decisions WHERE purchase_id=?1
             UNION ALL SELECT m.created_at, 'recon membership', r.name || ': ' || m.action || ' v' || m.version, m.reason FROM recon_membership_events m JOIN recons r ON r.id=m.recon_id WHERE m.purchase_id=?1
-            UNION ALL SELECT decided_at, 'account', coalesce(account,'unset') || ' v' || version, '' FROM review_decisions WHERE purchase_id=?1 ORDER BY 1 DESC,2,3")?
-            .query_map([id], |r| Ok(HistoryEvent { at:r.get(0)?, kind:r.get(1)?, value:r.get(2)?, reason:r.get(3)? }))?.collect::<rusqlite::Result<_>>()?)
+            UNION ALL SELECT decided_at, 'account', coalesce(account,'unset') || ' v' || version, '' FROM review_decisions WHERE purchase_id=?1
+            UNION ALL SELECT created_at, 'purchase details', 'v' || version || ' · ' || coalesce(category,'merchant category default') || ' · ' || coalesce(description,'merchant description default'), '' FROM purchase_details WHERE purchase_id=?1
+            UNION ALL SELECT created_at, 'staging', CASE staged WHEN 1 THEN 'Staged' ELSE 'Returned to review' END, snapshot FROM staging_events WHERE purchase_id=?1
+            UNION ALL SELECT created_at, 'related merchant default', original_name || ' v' || version || ' · ' || coalesce(category,'unset') || ' · ' || coalesce(description,'unset'), CASE WHEN source_id IS NULL THEN 'Manual default' ELSE 'Catalogue source #' || source_id || ', record ' || source_record END FROM merchant_definitions WHERE merchant_key IN (?2,?3)
+            UNION ALL SELECT created_at, 'related account rule', merchant_name || ' v' || version || ' · ' || coalesce(account,'disabled'), CASE card WHEN '' THEN 'Any card' ELSE 'Card ' || card END FROM account_rules WHERE merchant_key IN (?2,?3) AND (card='' OR card=(SELECT card_used FROM purchases WHERE id=?1))
+            UNION ALL SELECT created_at, 'merchant alias', original_name || ' → ' || target_key, '' FROM merchant_aliases WHERE alias_key=?2
+            UNION ALL SELECT e.created_at, 'source disposition', 'Observation #' || e.observation_id, e.reason FROM exception_decisions e JOIN source_observations o ON o.id=e.observation_id WHERE o.purchase_id=?1
+            UNION ALL SELECT s.created_at, 'historical import', s.filename || ', record ' || m.record, m.proposed FROM historical_matches m JOIN historical_sources s ON s.id=m.source_id WHERE m.purchase_id=?1
+            UNION ALL SELECT e.created_at, 'execution', 'Recon #' || o.run_id || ' · deposit ' || e.deposit || ' · note ' || e.note, e.message || coalesce(' · ' || e.transaction_id,'') FROM operation_events e JOIN run_operations o ON o.id=e.operation_id WHERE o.purchase_id=?1
+            UNION ALL SELECT m.created_at, 'note mapping', 'Recon #' || o.run_id, m.transaction_id FROM note_mappings m JOIN run_operations o ON o.id=m.operation_id WHERE o.purchase_id=?1
+            ) ORDER BY julianday(at) DESC,kind,value")?
+            .query_map(params![id,key,target], |r| Ok(HistoryEvent { at:r.get(0)?, kind:r.get(1)?, value:r.get(2)?, reason:r.get(3)? }))?.collect::<rusqlite::Result<_>>()?)
     }
 
     fn validate_recon_ids(&self, ids: &[i64]) -> Result<()> {

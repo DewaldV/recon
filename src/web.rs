@@ -18,6 +18,7 @@ use crate::{
     importer::MAX_UPLOAD,
     storage::{ImportSummary, Store},
 };
+mod workflow;
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
@@ -28,6 +29,8 @@ struct Inner {
     bootstrap: String,
     session: String,
     csrf: String,
+    execution: Arc<Semaphore>,
+    execution_message: Mutex<String>,
 }
 
 impl AppState {
@@ -38,6 +41,8 @@ impl AppState {
             bootstrap: crate::config::random_secret()?,
             session: crate::config::random_secret()?,
             csrf: crate::config::random_secret()?,
+            execution: Arc::new(Semaphore::new(1)),
+            execution_message: Mutex::new(String::new()),
         })))
     }
 
@@ -94,13 +99,26 @@ pub fn router(state: AppState) -> Router {
         .route("/imports/{id}", get(import_summary))
         .route("/purchases", get(legacy_purchases))
         .route("/review", get(review))
+        .route("/merchants", get(workflow::merchants))
+        .route("/rules", get(workflow::rules))
+        .route("/run", get(workflow::prepare))
+        .route("/runs", get(workflow::runs))
+        .route("/runs/start", post(workflow::start))
+        .route("/runs/{id}", get(workflow::run))
+        .route("/runs/{id}/resume", post(workflow::resume))
+        .route("/runs/{id}/notes/{operation}", post(workflow::note))
         .route("/review/stage", post(stage_change))
         .route("/review/catalogue", post(catalogue_upload))
+        .route("/history/import", post(workflow::history_upload))
         .route("/review/previews/{token}", get(review_preview))
         .route("/review/previews/{token}/commit", post(commit_change))
         .route("/review/{id}/account", post(decide))
+        .route(
+            "/review/{id}/edit",
+            get(workflow::edit).post(workflow::save),
+        )
         .route("/review/{id}/history", get(purchase_history))
-        .route("/recons", get(recon_list))
+        .route("/recons", get(|| async { Redirect::permanent("/runs") }))
         .route("/recons/{id}", get(recon_summary))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 64 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
@@ -212,7 +230,7 @@ async fn home(State(state): State<AppState>) -> Result<Html<String>> {
     })
 }
 
-async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Result<Redirect> {
+async fn read_upload(state: &AppState, mut multipart: Multipart) -> Result<(String, Vec<u8>)> {
     let mut csrf = None;
     let mut file = None;
     while let Some(field) = multipart
@@ -230,7 +248,7 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Resu
                 );
             }
             Some("file") if file.is_none() => {
-                let filename = field.file_name().unwrap_or("transactions.csv").to_owned();
+                let filename = field.file_name().unwrap_or("upload.csv").to_owned();
                 if filename.len() > 255 {
                     return Err(Error::Invalid("Filename is too long.".into()));
                 }
@@ -250,16 +268,23 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Resu
             "Invalid CSRF token. Reload the page.".into(),
         ));
     }
-    let (filename, bytes) =
-        file.ok_or_else(|| Error::Invalid("Choose a Virgin CSV to import.".into()))?;
+    let (filename, bytes) = file.ok_or_else(|| Error::Invalid("Choose a CSV to import.".into()))?;
+    Ok((filename, bytes.to_vec()))
+}
+
+async fn upload(State(state): State<AppState>, multipart: Multipart) -> Result<Redirect> {
+    let (filename, bytes) = read_upload(&state, multipart).await?;
     let id = state.work(move |s| s.import(&filename, &bytes)).await?;
-    Ok(Redirect::to(&format!("/imports/{id}")))
+    Ok(Redirect::to(&format!(
+        "/review?view=attention&import_notice={id}"
+    )))
 }
 
 #[derive(Template)]
 #[template(path = "import.html")]
 struct ImportPage {
     summary: ImportSummary,
+    csrf: String,
 }
 
 async fn import_summary(
@@ -267,6 +292,7 @@ async fn import_summary(
     Path(id): Path<i64>,
 ) -> Result<Html<String>> {
     render(ImportPage {
+        csrf: state.0.csrf.clone(),
         summary: state.work(move |s| s.summary(id)).await?,
     })
 }
@@ -329,8 +355,20 @@ impl IntoResponse for Error {
             _ => StatusCode::SERVICE_UNAVAILABLE,
         };
         // Error Display deliberately excludes SQL, paths, and financial input.
-        (code, self.to_string()).into_response()
+        let page = ErrorPage {
+            message: self.to_string(),
+        };
+        match page.render() {
+            Ok(html) => (code, Html(html)).into_response(),
+            Err(_) => (code, "Recon could not complete this request.").into_response(),
+        }
     }
+}
+
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ErrorPage {
+    message: String,
 }
 
 #[derive(Template)]
@@ -352,17 +390,26 @@ struct ReviewContext {
     previous: String,
     next: String,
     query: String,
+    return_to: String,
+    active_run: Option<i64>,
+    import_notice: Option<ImportSummary>,
 }
 async fn review(
     State(state): State<AppState>,
-    Query(filters): Query<crate::review::Filters>,
+    Query(mut filters): Query<crate::review::Filters>,
     headers: HeaderMap,
 ) -> Result<Html<String>> {
+    if filters.view.is_empty() {
+        filters.view = "attention".into();
+    }
     let query = filters.clone();
     let (data, defaults) = state
         .work(move |s| Ok((s.review_page(&query)?, s.merchant_default(&query.q)?)))
         .await?;
-    let view = review_context(&state, filters, data, defaults);
+    let mut view = review_context(&state, filters, data, defaults);
+    if let Some(id) = view.filters.import_notice {
+        view.import_notice = Some(state.work(move |s| s.summary(id)).await?);
+    }
     if is_htmx(&headers) {
         render(ReviewWorkspace { view })
     } else {
@@ -408,6 +455,8 @@ fn review_context(
     let query = review_link(&filters, data.page)
         .trim_start_matches("/review?")
         .to_owned();
+    let return_to = review_link(&filters, data.page);
+    let active_run = data.active_run;
     ReviewContext {
         csrf: state.0.csrf.clone(),
         data,
@@ -417,6 +466,9 @@ fn review_context(
         default_category,
         default_description,
         query,
+        return_to,
+        active_run,
+        import_notice: None,
     }
 }
 fn check_csrf(state: &AppState, form: &std::collections::HashMap<String, String>) -> Result<()> {
@@ -435,20 +487,37 @@ async fn stage_change(
     check_csrf(&state, &form)?;
     let value = |key: &str| form.get(key).cloned().unwrap_or_default();
     let mut rows = Vec::new();
+    let mut signatures = Vec::new();
     for key in form.keys().filter_map(|k| k.strip_prefix("pick_")) {
         let (id, version) = key
             .split_once('_')
             .ok_or_else(|| Error::Invalid("Invalid selection.".into()))?;
-        rows.push((
-            id.parse()
-                .map_err(|_| Error::Invalid("Invalid purchase ID.".into()))?,
-            version
-                .parse()
-                .map_err(|_| Error::Invalid("Invalid decision version.".into()))?,
-        ));
+        let id: i64 = id
+            .parse()
+            .map_err(|_| Error::Invalid("Invalid purchase ID.".into()))?;
+        let version: i64 = version
+            .parse()
+            .map_err(|_| Error::Invalid("Invalid decision version.".into()))?;
+        rows.push((id, version));
+        signatures.push((id, value(&format!("pick_{id}_{version}"))));
     }
     rows.sort_unstable();
     let change = match value("action").as_str() {
+        "stage" | "unstage" => Change::Staging {
+            rows: signatures,
+            staged: value("action") == "stage",
+        },
+        "account_rule" => Change::AccountRule {
+            merchant: value("merchant"),
+            card: value("card"),
+            account: value("account"),
+        },
+        "exception" => Change::Exception {
+            observation_id: value("observation_id")
+                .parse()
+                .map_err(|_| Error::Invalid("Invalid source observation.".into()))?,
+            reason: value("reason"),
+        },
         "default" => Change::Default {
             merchant: value("merchant"),
             category: value("category"),
@@ -473,71 +542,32 @@ async fn stage_change(
             reason: value("reason"),
             reopen: form.contains_key("reopen"),
         },
-        "membership_add" | "membership_remove" => Change::Membership {
-            ids: rows.iter().map(|r| r.0).collect(),
-            recon_id: value("recon_id")
-                .parse()
-                .map_err(|_| Error::Invalid("Choose a recon.".into()))?,
-            include: value("action") == "membership_add",
-            reason: value("reason"),
-        },
-        "create_recon" => Change::CreateRecon {
-            name: value("name"),
-        },
-        "recon_status" => Change::ReconStatus {
-            recon_id: value("recon_id")
-                .parse()
-                .map_err(|_| Error::Invalid("Choose a recon.".into()))?,
-            status: value("status"),
-            reason: value("reason"),
-        },
         _ => return Err(Error::Invalid("Choose a review action.".into())),
     };
-    let token = state.work(move |s| s.stage_review(change)).await?;
+    let return_to = workflow::return_path(&value("return_to"))?;
+    let token = state
+        .work(move |s| {
+            let token = s.stage_review(change)?;
+            s.db.execute(
+                "INSERT INTO preview_context(token,return_to) VALUES(?1,?2)",
+                rusqlite::params![token, return_to],
+            )?;
+            Ok(token)
+        })
+        .await?;
     Ok(Redirect::to(&format!("/review/previews/{token}")))
 }
-async fn catalogue_upload(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> Result<Redirect> {
-    let mut csrf = None;
-    let mut file = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| Error::Invalid("Invalid or oversized catalogue upload.".into()))?
-    {
-        match field.name() {
-            Some("csrf") if csrf.is_none() => {
-                csrf = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|_| Error::Invalid("Invalid form.".into()))?,
-                )
-            }
-            Some("file") if file.is_none() => {
-                let filename = field.file_name().unwrap_or("merchants.csv").to_owned();
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|_| Error::Invalid("Invalid or oversized catalogue.".into()))?;
-                if bytes.len() > MAX_UPLOAD {
-                    return Err(Error::Invalid("CSV exceeds 10 MiB.".into()));
-                }
-                file = Some((filename, bytes.to_vec()));
-            }
-            _ => return Err(Error::Invalid("Unexpected catalogue field.".into())),
-        }
-    }
-    if !csrf.is_some_and(|v| equal(&v, &state.0.csrf)) {
-        return Err(Error::Invalid("Invalid CSRF token.".into()));
-    }
-    let (filename, bytes) = file.ok_or_else(|| Error::Invalid("Choose a merchant CSV.".into()))?;
+async fn catalogue_upload(State(state): State<AppState>, multipart: Multipart) -> Result<Redirect> {
+    let (filename, bytes) = read_upload(&state, multipart).await?;
     let token = state
         .work(move |s| {
             let change = Store::parse_catalogue(filename, bytes)?;
-            s.stage_review(change)
+            let token = s.stage_review(change)?;
+            s.db.execute(
+                "INSERT INTO preview_context(token,return_to) VALUES(?1,'/merchants')",
+                [&token],
+            )?;
+            Ok(token)
         })
         .await?;
     Ok(Redirect::to(&format!("/review/previews/{token}")))
@@ -579,6 +609,45 @@ async fn review_preview(
         reopen: false,
     };
     match &page.data.change {
+        Change::Historical { filename, .. } => {
+            page.title = format!("Import historical decisions: {filename}");
+            page.operation="Confirm every reference match below. Existing explicit account, detail, handling, and run decisions are preserved. Legacy Paid = Yes records external funding only when handling is still unknown with no explicit decision. Paid = No never confirms outstanding status. Nothing is staged automatically.".into();
+        }
+        Change::Staging { staged, .. } => {
+            page.title = if *staged {
+                "Stage reviewed purchases"
+            } else {
+                "Return purchases to review"
+            }
+            .into();
+            page.operation=if *staged {"Confirm these purchases still need funding and that the account, category, and note below are correct. They will join the next recon automatically."} else {"Return these purchases to review. They remain outstanding."}.into();
+        }
+        Change::AccountRule {
+            merchant,
+            card,
+            account,
+        } => {
+            page.title = "Approve account rule".into();
+            page.operation = format!(
+                "Exact merchant: {merchant}; card: {} → {}. Explicit purchase choices are preserved. Changed effective decisions need staging again.",
+                if card.is_empty() { "any" } else { card },
+                if account.is_empty() {
+                    "disabled"
+                } else {
+                    account
+                }
+            );
+        }
+        Change::Exception {
+            observation_id,
+            reason,
+        } => {
+            page.title = "Confirm source exception disposition".into();
+            page.operation = format!(
+                "Record the evidence for source observation #{observation_id}. For a conflict, retain the existing canonical purchase and reject this conflicting observation; otherwise exclude this source observation from funding. The original source is retained."
+            );
+            page.reason = reason.clone();
+        }
         Change::Catalogue { filename, .. } => {
             page.title = format!("Import merchant catalogue: {filename}");
             page.catalogue = true;
@@ -683,36 +752,24 @@ async fn commit_change(
         );
     }
     let allow = form.contains_key("allow_categories");
-    state
-        .work(move |s| s.commit_review(&token, &selected, allow))
+    let return_to = state
+        .work(move |s| {
+            let return_to = s.review_preview(&token)?.return_to;
+            s.commit_review(&token, &selected, allow)?;
+            Ok(return_to)
+        })
         .await?;
-    Ok(Redirect::to("/review"))
-}
-
-#[derive(Template)]
-#[template(path = "recons.html")]
-struct ReconList {
-    csrf: String,
-    recons: Vec<crate::recon::ReconInfo>,
-}
-
-async fn recon_list(State(state): State<AppState>) -> Result<Html<String>> {
-    render(ReconList {
-        csrf: state.0.csrf.clone(),
-        recons: state.work(|s| s.recons()).await?,
-    })
+    Ok(Redirect::to(&return_to))
 }
 
 #[derive(Template)]
 #[template(path = "recon.html")]
 struct ReconPage {
-    csrf: String,
     summary: crate::recon::ReconSummary,
 }
 
 async fn recon_summary(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Html<String>> {
     render(ReconPage {
-        csrf: state.0.csrf.clone(),
         summary: state.work(move |s| s.recon_summary(id)).await?,
     })
 }

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recon #{{ run.id }}</h1><p>{{ run.created_at }} · {{ run.status }}</p>
+{% if !message.is_empty() %}<p class="notice" role="status">{{ message }}</p>{% endif %}
+{% if running %}<p role="status" id="run-progress" data-refresh="true">Recon is running. Results refresh automatically.</p>{% else %}{% if run.status == "active" %}
+<form method="post" action="/runs/{{ run.id }}/resume" class="panel" autocomplete="off"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Temporary Monzo token <input type="password" name="token" required maxlength="4096" autocomplete="off"></label><button>Resume deposits</button><p class="muted">Confirmed deposits are skipped. Pending and uncertain requests retain their original deduplication keys.</p></form>{% endif %}{% endif %}
+<div class="table-scroll"><table><thead><tr><th>Purchase</th><th>Destination</th><th>Amount</th><th>Deposit</th><th>Note</th></tr></thead><tbody>
+{% for op in run.operations %}<tr><td>{{ op.merchant }}<small class="reference">Purchase #{{ op.purchase_id }}</small></td><td>{{ op.destination.allocation }}<small class="reference">{{ op.destination.account_id }} → {{ op.destination.pot_id }}</small></td><td class="amount">£{{ op.amount() }}</td><td>{{ op.deposit }}<small class="reference">{{ op.message }}</small></td><td>{{ op.note_status }}<small class="reference">{{ op.note }}</small>
+{% if op.deposit == "confirmed" && op.note_status != "complete" && !running %}<details><summary>Match transaction and apply note</summary><form method="post" action="/runs/{{ run.id }}/notes/{{ op.id }}" autocomplete="off"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Monzo transaction ID <input name="transaction" value="{{ op.mapped_transaction }}" placeholder="tx_…" required {% if !op.mapped_transaction.is_empty() %}readonly{% endif %}></label><label><input type="checkbox" name="confirmed" required> I verified this is the transaction for this deposit.</label><label>Temporary token <input type="password" name="token" required maxlength="4096" autocomplete="off"></label><button>Apply note</button></form></details>{% endif %}
+</td></tr>{% endfor %}</tbody></table></div>
+<p><a href="/review">Back to review</a> · <a href="/runs">All recon results</a></p>
+{% endblock %}

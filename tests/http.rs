@@ -13,6 +13,100 @@ use tower::ServiceExt;
 
 const FIRST: &str = include_str!("fixtures/virgin-first.csv");
 
+#[tokio::test]
+async fn execution_edit_and_history_routes_reject_untrusted_requests_without_echoing_credentials() {
+    let (directory, app, cookie, csrf) = app().await;
+    let token = "synthetic-private-credential";
+    let forms = [
+        ("/runs/start", format!("revision=0&token={token}")),
+        ("/runs/1/resume", format!("token={token}")),
+        ("/runs/1/notes/1", format!("token={token}&transaction=tx_test&confirmed=on")),
+        ("/review/1/edit", "signature=stale&return_to=%2Freview&account=personal&category=Shopping&description=Test&action=stage".into()),
+    ];
+    for (path, fields) in forms {
+        for protection in ["session", "origin", "csrf"] {
+            let mut req = request(
+                "POST",
+                path,
+                if protection == "session" { "" } else { &cookie },
+                format!(
+                    "csrf={}&{fields}",
+                    if protection == "csrf" { "wrong" } else { &csrf }
+                ),
+                "application/x-www-form-urlencoded",
+            );
+            if protection == "origin" {
+                req.headers_mut().remove("origin");
+            }
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                response.status(),
+                if protection == "csrf" {
+                    StatusCode::BAD_REQUEST
+                } else if protection == "session" {
+                    StatusCode::UNAUTHORIZED
+                } else {
+                    StatusCode::FORBIDDEN
+                },
+                "{path}: {protection}"
+            );
+            assert!(!text(response).await.contains(token));
+        }
+    }
+    for protection in ["session", "origin", "csrf"] {
+        let mut req = request(
+            "POST",
+            "/history/import",
+            if protection == "session" { "" } else { &cookie },
+            multipart(
+                if protection == "csrf" { "wrong" } else { &csrf },
+                "Reference,Account,Category,Description,Paid,Reason\n",
+            ),
+            "multipart/form-data; boundary=boundary",
+        );
+        if protection == "origin" {
+            req.headers_mut().remove("origin");
+        }
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            if protection == "csrf" {
+                StatusCode::BAD_REQUEST
+            } else if protection == "session" {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::FORBIDDEN
+            }
+        );
+    }
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/runs/start",
+            &cookie,
+            format!("csrf={csrf}&revision=-1&token={token}"),
+            "application/x-www-form-urlencoded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(!text(response).await.contains(token));
+    let db = rusqlite::Connection::open(directory.path().join("recon.sqlite3")).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM recon_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM historical_sources", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
 fn request(
     method: &str,
     path: &str,
@@ -120,7 +214,15 @@ async fn upload_review_fragments_and_normal_form_fallback() {
         .unwrap();
     let html = text(response).await;
     assert!(html.contains("3 source records"));
-    assert!(html.contains("missing_reference"));
+    assert!(html.contains("View import results and exceptions"));
+    let summary = text(
+        app.clone()
+            .oneshot(request("GET", "/imports/1", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(summary.contains("missing_reference"));
     let response = app
         .clone()
         .oneshot(request("GET", "/review", &cookie, "", "text/html"))
@@ -400,8 +502,12 @@ async fn inline_account_edits_refresh_filter_membership_counts_and_bulk_versions
     assert!(!html.contains("id=\"review-1\""));
     assert!(html.contains("id=\"review-2\""));
     assert!(html.contains("form=\"bulk-review\" name=\"pick_2_0\""));
-    assert!(html.contains("value=\"SYNTHETIC SHOP\""));
-    assert!(html.contains("name=\"import_id\" type=\"number\" min=\"1\" value=\"1\""));
+    assert!(html.contains("q=SYNTHETIC%20SHOP"));
+    assert!(html.contains("import_id=1"));
+    assert!(
+        !html.contains("id=\"bulk-review\""),
+        "unrelated draft controls stay outside the swap"
+    );
     assert!(html.contains("hx-target=\"#review-workspace\""));
     let response = app
         .clone()
@@ -473,7 +579,7 @@ async fn merchant_review_preview_commit_filters_and_security() {
         assert_eq!(response.status(), StatusCode::OK);
         let html = text(response).await;
         assert!(html.contains("2 distinct purchases"));
-        assert!(html.contains("payment history unknown"));
+        assert!(html.contains("confirm what still needs funding"));
     }
     assert_eq!(
         app.clone()
@@ -727,32 +833,17 @@ async fn stage_and_confirm(app: &Router, cookie: &str, csrf: &str, fields: &str)
 }
 
 #[tokio::test]
-async fn recon_scope_external_handling_totals_and_history_workflow() {
+async fn global_queue_staging_external_handling_totals_and_history_workflow() {
     let (_directory, app, cookie, csrf) = app().await;
     upload(&app, &cookie, &csrf, FIRST).await;
-    let preview = stage_and_confirm(
-        &app,
-        &cookie,
-        &csrf,
-        "action=create_recon&name=Synthetic%20October",
-    )
-    .await;
-    assert!(preview.contains("Create active recon: Synthetic October"));
     let html = text(
         app.clone()
-            .oneshot(request("GET", "/recons/1", &cookie, "", "text/html"))
+            .oneshot(request("GET", "/runs", &cookie, "", "text/html"))
             .await
             .unwrap(),
     )
     .await;
-    assert!(html.contains("0 explicitly selected purchases"));
-    stage_and_confirm(
-        &app,
-        &cookie,
-        &csrf,
-        "action=membership_add&recon_id=1&pick_1_0=on&pick_2_0=on&reason=Selected%20for%20October",
-    )
-    .await;
+    assert!(html.contains("No recon runs yet"));
     stage_and_confirm(&app,&cookie,&csrf,"action=default&merchant=SYNTHETIC%20SHOP&category=Shopping&description=Synthetic%20purchase").await;
     stage_and_confirm(
         &app,
@@ -762,23 +853,57 @@ async fn recon_scope_external_handling_totals_and_history_workflow() {
     )
     .await;
     stage_and_confirm(&app,&cookie,&csrf,"action=handling&handling=external&pick_1_1=on&reason=Partner%20already%20funded%20the%20pot").await;
-    stage_and_confirm(&app,&cookie,&csrf,"action=handling&handling=outstanding&pick_2_1=on&reason=Confirmed%20not%20handled%20elsewhere").await;
-    let html = text(
+    let page = text(
         app.clone()
-            .oneshot(request("GET", "/recons/1", &cookie, "", "text/html"))
+            .oneshot(request("GET", "/review", &cookie, "", "text/html"))
             .await
             .unwrap(),
     )
     .await;
-    assert!(html.contains("2 explicitly selected purchases"));
-    assert!(html.contains("Joint: 1 purchases · £12.34"));
-    assert!(html.contains("Personal: 0 purchases · £0.00"));
-    assert!(html.contains("No exports or Monzo execution"));
+    let signature = page
+        .split("name=\"pick_2_1\" value=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        &format!("action=stage&pick_2_1={signature}"),
+    )
+    .await;
+    let html = text(
+        app.clone()
+            .oneshot(request("GET", "/run", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(html.contains("£12.34"));
+    assert!(html.contains("1 source exceptions"));
+    assert!(!html.contains("name=\"token\""));
+    stage_and_confirm(
+        &app,
+        &cookie,
+        &csrf,
+        "action=exception&observation_id=3&reason=Synthetic+non-funding+row",
+    )
+    .await;
+    let ready = text(
+        app.clone()
+            .oneshot(request("GET", "/run", &cookie, "", "text/html"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(ready.contains("Confirm and run recon"));
     let html = text(
         app.clone()
             .oneshot(request(
                 "GET",
-                "/review?recon_id=1&view=ready",
+                "/review?view=staged",
                 &cookie,
                 "",
                 "text/html",
@@ -790,7 +915,7 @@ async fn recon_scope_external_handling_totals_and_history_workflow() {
     assert!(html.contains("1 distinct purchases"));
     assert!(html.contains("id=\"review-2\""));
     assert!(!html.contains("id=\"review-1\""));
-    assert!(html.contains("recon_id=1"));
+    assert!(!html.contains("Target recon"));
     let html = text(
         app.clone()
             .oneshot(request(
@@ -806,7 +931,7 @@ async fn recon_scope_external_handling_totals_and_history_workflow() {
     .await;
     assert!(html.contains("external v1"));
     assert!(html.contains("Partner already funded the pot"));
-    assert!(html.contains("Synthetic October: add v1"));
+    assert!(html.contains("joint v1"));
     let response = app
         .clone()
         .oneshot(request(
@@ -821,28 +946,29 @@ async fn recon_scope_external_handling_totals_and_history_workflow() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let preview = stage_and_confirm(&app,&cookie,&csrf,"action=handling&handling=outstanding&pick_1_1=on&reason=Confirmed%20original%20transfer%20was%20reversed&reopen=on").await;
     assert!(preview.contains("Explicit reopening was requested"));
-    stage_and_confirm(
-        &app,
-        &cookie,
-        &csrf,
-        "action=recon_status&recon_id=1&status=archived&reason=Archive%20is%20not%20payment",
-    )
-    .await;
     let html = text(
         app.clone()
-            .oneshot(request("GET", "/recons/1", &cookie, "", "text/html"))
+            .oneshot(request("GET", "/run", &cookie, "", "text/html"))
             .await
             .unwrap(),
     )
     .await;
-    assert!(html.contains("Joint: 0 purchases · £0.00"));
-    assert!(html.contains("archived"));
+    assert!(html.contains("1 purchases need review"));
+    assert!(!html.contains("name=\"token\""));
 }
 
 #[tokio::test]
 async fn recon_routes_and_handling_mutations_require_authentication_origin_and_csrf() {
     let (_directory, app, cookie, csrf) = app().await;
-    for path in ["/recons", "/recons/1", "/review/1/history"] {
+    for path in [
+        "/recons",
+        "/recons/1",
+        "/review/1/history",
+        "/run",
+        "/runs",
+        "/rules",
+        "/merchants",
+    ] {
         assert_eq!(
             app.clone()
                 .oneshot(request("GET", path, "", "", "text/html"))
@@ -910,14 +1036,14 @@ async fn recon_routes_and_handling_mutations_require_authentication_origin_and_c
 }
 
 #[tokio::test]
-async fn recon_names_reasons_and_history_are_escaped() {
+async fn rule_names_reasons_and_history_are_escaped() {
     let (_directory, app, cookie, csrf) = app().await;
     upload(&app, &cookie, &csrf, FIRST).await;
     stage_and_confirm(
         &app,
         &cookie,
         &csrf,
-        "action=create_recon&name=%3Cscript%3Eevil%3C%2Fscript%3E",
+        "action=account_rule&merchant=%3Cscript%3Eevil%3C%2Fscript%3E&account=joint",
     )
     .await;
     stage_and_confirm(
@@ -927,7 +1053,7 @@ async fn recon_names_reasons_and_history_are_escaped() {
         "action=handling&handling=external&pick_1_0=on&reason=%3Cb%3Enot%20markup%3C%2Fb%3E",
     )
     .await;
-    for path in ["/recons", "/recons/1", "/review", "/review/1/history"] {
+    for path in ["/rules", "/review?view=all", "/review/1/history"] {
         let html = text(
             app.clone()
                 .oneshot(request("GET", path, &cookie, "", "text/html"))

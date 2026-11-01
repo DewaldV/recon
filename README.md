@@ -6,25 +6,19 @@ execute resumable transfers into Monzo pots.
 
 ## Status
 
-Increments 1 and 2 are implemented: persistent CSV import, guarded overlap handling,
-merchant catalogue preview/import, versioned category/description defaults, exact
-aliases, purchase overrides, filtered review, and atomic bulk Personal/Joint edits.
-Private local sessions, version-checked edits, and verified backups remain in place.
+The current flow is **Import → Review → Stage → Run**:
 
-Increment 3's first slice adds explicit handling states, named recon selections,
-decision history, and outstanding-ready Personal/Joint totals. See the
-[Slice 1 guide](docs/phase-1/increment-3-slice-1.md) for usage and limitations.
-Unknown history, external funding (legacy Paid = Yes), exclusions, and blocked
-rows do not enter those totals. Setting an account or merchant details alone
-does not make a purchase outstanding-ready.
+- One global outstanding queue, with Personal/Joint totals and approved merchant/account defaults.
+- Individual Save and stage, bulk review, version-checked staging, and explicit external-funding/exclusion decisions.
+- Reference-matched historical CSV migration with provenance and preservation of existing decisions.
+- One immutable run at a time, temporary Monzo tokens, persisted deposit results and deduplication keys, and restart/resume.
+- Separate deposit/note progress. Notes require a user-confirmed Monzo transaction ID; automatic correlation is unresolved.
 
-Account rules, historical spreadsheet migration, source-exception repair, exports,
-approval, and Monzo access are not implemented. Review-complete still means
-details complete, not evidence of funding or permission to execute.
-
-See [Increment 2 usage and verification](docs/phase-1/increment-2-verification.md).
-Rust checks and the extended Firefox smoke test pass. Stop the app before running
-`recon-browser-check` so its temporary test instance can use port 7310.
+See the [current workflow guide](docs/single-queue-workflow.md). Old named
+workspaces are read-only history. Source dispositions are implemented; creating
+repaired purchases, pending-to-billed linking, and export/handoff are still deferred.
+Verification uses synthetic data and mocked Monzo HTTP responses; live Monzo and
+real-data acceptance have not been performed.
 
 ## Development
 
@@ -48,8 +42,10 @@ Use `cargo run -- --data-dir /absolute/private/local/path` to override it. Do no
 put a live database in Proton Drive or another sync folder. Set `RECON_SYNC_ROOTS`
 to colon-separated additional sync roots to reject them explicitly.
 
-Upload an original Virgin CSV, inspect its exception summary, and open Review.
-`/review` combines individual account edits, bulk actions, and merchant enrichment.
+Upload an original Virgin CSV to open Review, with a link to source exceptions.
+`/review` combines individual account edits, bulk actions, and staging. Merchant
+defaults and account rules have separate screens. Run recon includes every
+outstanding purchase, regardless of filters, after all blockers are resolved.
 Old `/purchases` bookmarks redirect to Review. Inline saves refresh the filtered
 workspace and clear its page selection so counts and bulk decision versions stay current.
 Only one underlying Virgin account (`virgin-primary`) is supported in this first
@@ -64,7 +60,8 @@ Full rolling exports include old history. They are not a list of unpaid purchase
   Ports 7310 and 4444 must be free. No Node tooling is needed.
 - `cargo run -- --backup`: with the app stopped, create a verified private snapshot
   under the selected data directory's `backups/`. Use the same `--data-dir` if
-  backing up a non-default database. See [restore instructions](docs/development.md).
+  backing up a non-default database. Preserve the latest `execution.guard` separately
+  alongside snapshots. See [restore instructions](docs/development.md#backups).
 
 ## Plans
 

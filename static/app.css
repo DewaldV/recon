@@ -22,3 +22,25 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .htmx-request { opacity: .6; }
 input:not([type=file]):not([type=checkbox]):not([type=hidden]), textarea { font: inherit; padding: .4rem; border: 1px solid #a5b8ac; border-radius: .3rem; max-width: 100%; }
 textarea { display: block; width: 35rem; min-height: 4rem; } .filters { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; } .panel { margin-bottom: 1rem; } input:focus-visible, textarea:focus-visible { outline: 3px solid #d38c2e; }
+* { box-sizing: border-box; }
+nav { flex-wrap: wrap; }
+.page-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap: 1rem; }
+.metric { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
+.metric strong { font-size: 1.7rem; font-variant-numeric: tabular-nums; }
+.selection-toolbar { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
+.selection-toolbar > small { width: 100%; color: #52665e; }
+.selection-toolbar > details[open] { width: 100%; }
+.action-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 1rem; margin-top: 1rem; }
+fieldset { border: 1px solid #cedbd2; border-radius: .4rem; padding: 1rem; min-width: 0; margin: 0 0 1rem; }
+summary { cursor: pointer; font-weight: 650; padding: .3rem 0; }
+details[open] > summary { margin-bottom: 1rem; }
+.secondary { color: #146750; background: white; }
+.badge { display: inline-block; background: #eaf1ec; border-radius: .3rem; padding: .2rem .5rem; font-size: .85rem; }
+.badge.success { background: #d8eee4; color: #123b34; }
+.notice { border-left: 4px solid #b27b27; background: #fff6e6; padding: 1rem; }
+.source-excerpt { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.filters label { display: flex; flex-direction: column; gap: .3rem; }
+.filters input { width: 14rem; }
+input[type=password] { width: 30rem; }
+@media (max-width: 650px) { header { padding: 1rem; gap: 1rem; } header span { margin-left: 0; } main { padding: 0 1rem; margin-top: 1rem; } .panel { padding: 1rem; } .filters label { width: 100%; } .filters input, .filters select { width: 100%; } }

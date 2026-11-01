@@ -80,9 +80,53 @@ workspace changes. One purchase may belong to only one active recon; archive and
 membership events never settle it. Archived selections retain history but are
 never ready. SQL constraints and audit triggers back these domain rules.
 
+### D026 — Single queue and automatically recorded runs (agreed)
+
+Supersedes the named-workspace scope in D024/D025. All outstanding purchases belong
+to the next recon. Personal and Joint are grouped within one run; filtering and
+pagination never determine execution scope. Only one run can be active. Existing
+workspace records remain read-only history and do not confer staging approval.
+
+### D027 — Versioned staging and exact rules (agreed)
+
+Staging explicitly confirms outstanding funding and the effective account,
+category and note. Relevant source/decision changes invalidate staging. Defaults
+never stage automatically. Account precedence is explicit purchase choice,
+merchant+card rule, merchant rule, then missing. Clearing a purchase choice returns
+to rule fallback. All outstanding blockers and source exceptions must be resolved
+before starting. Save and stage is one atomic transaction.
+
+### D028 — Temporary-token execution and manual note matching (agreed/default)
+
+Supersedes `pass-cli` injection in D013. The user supplies a temporary token through
+the local form for each execution/resume/note attempt. The backend holds it only
+in memory; never persist or return it. Immutable instructions and keys precede
+remote requests, confirmed deposits are skipped on resume, and uncertain retries
+retain their original identity. Deposit confirmation removes a purchase from the
+outstanding queue, but a run completes only when its notes also complete.
+
+Monzo deposits return pot state without a transaction ID. The current implementation
+requires an explicit user-confirmed transaction match and validates account scope,
+currency and amount. It never chooses a transaction based on equal amount/time.
+Reserve the mapping before annotation and reuse it after failure. Automatic
+correlation and live API verification remain unresolved.
+
+### D029 — Migration, source dispositions and restore guard (implementation default)
+
+Historical CSV rows must match verified Virgin references. Preserve raw bytes,
+proposals and prior snapshots; never overwrite existing explicit decisions or run
+instructions. Paid Yes can establish external handling when no handling decision
+exists; Paid No cannot establish outstanding status. Neither stages purchases.
+Source dispositions retain canonical purchases/reject conflicting observations or
+explicitly exclude non-purchase observations; they do not manufacture repaired rows.
+
+Persist an independent execution watermark to detect stale database restores.
+Missing/stale recovery evidence blocks execution; restoration of both old database
+and old watermark still requires external reconciliation. See the restore guide.
+
 ## Remaining open decisions
 
 - Merchant pattern/rule language and historical suggestion thresholds.
-- Reliable Monzo transaction correlation for notes (must be solved before live execution).
+- Automatic Monzo transaction correlation for notes and live validation of explicit matching.
 - Refund/fee financial treatment and any future withdrawal support.
 - Any Proton acquisition integration or persistent OAuth workflow.
