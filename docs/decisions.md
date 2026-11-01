@@ -37,7 +37,31 @@ The Firefox smoke test showed that `no-referrer` makes the Origin of ordinary
 multipart form navigation null. Keep exact Origin validation rather than accepting
 null Origins; `same-origin` still prevents referrer disclosure to other origins.
 
-## Remaining open decisions
+## Additional agreed decisions
+
+### D022 — One review workspace (agreed)
+
+Consolidate individual account allocation and merchant/bulk review into `/review`.
+Keep `/purchases` as an authenticated bookmark redirect, not a second screen.
+Inline edits retain version/conflict checks and refresh counts, filter membership,
+and bulk versions together. This adds no handling state or financial execution.
+
+### D023 — Meaning of legacy Paid (user clarified)
+
+`Paid = Yes` means the purchase was handled outside this recon process. For
+example, the user's partner purchased on the credit card and independently moved
+the corresponding money into the Monzo credit-card pot. Recon must not deposit
+for that purchase again. It does **not** mean the credit-card bill itself was repaid.
+
+Increment 3 should map a confirmed matching legacy Yes to **handled externally**,
+not generic exclusion: preserve the purchase and its audit history, but exclude it
+from outstanding totals, executable exports, and deposits across all recon workspaces.
+A generic exclusion remains a separate state with its own reason. Confirm the
+source-row match and provenance before migration; this meaning does not resolve
+ambiguous matches or prove that `Paid = No` remains outstanding today. No existing
+purchase handling state is changed by recording this clarification.
+
+## Still open
 
 - Merchant pattern/rule language and historical suggestion thresholds.
 - Reliable Monzo transaction correlation for notes (must be solved before live execution).

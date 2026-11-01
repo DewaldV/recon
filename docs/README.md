@@ -70,6 +70,11 @@ decisions with provenance. Never infer execution from a CSV export, directory
 date, or a `Paid = No` cell. Historical execution status must be explicitly
 confirmed. Older rows must not inadvertently become newly payable.
 
+The user clarified that legacy `Paid = Yes` means handled outside recon (for
+example, their partner already moved money to the Monzo credit-card pot), not
+repayment of the credit-card bill. Increment 3 will preserve that evidence as
+handled externally and prevent duplicate funding, subject to confirmed row matching.
+
 ## Delivery sequence
 
 - [Decisions](decisions.md)

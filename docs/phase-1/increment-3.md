@@ -19,8 +19,12 @@ No Monzo calls, credentials, live approval, or payment execution are introduced.
 - Support confirmed outstanding, handled manually/externally, and excluded-with-
   reason states. Record provenance, time, and supporting note/evidence. Unknown
   history is never payable; category/account completion cannot change this state.
-- Distinguish money already moved to the repayment pot from repayment of the credit
-  card itself. Clarify legacy `Paid` semantics with the user before migration.
+- Legacy `Paid = Yes` means the purchase was handled outside recon, as clarified
+  by the user: for example, their partner already moved the purchase amount into
+  the Monzo credit-card pot. It does not mean the credit-card bill itself was repaid.
+  Record a confirmed match as handled externally and exclude it from outstanding
+  totals, executable exports, and deposits in every recon. Preserve the purchase
+  and audit history; do not conflate this with a generic exclusion. See D023.
 - Add an explicit named recon workspace/selection. Its scope is a persisted set of
   canonical purchases, not all rows from a rolling export or a posting-date cutoff.
   Import membership/date filters may help selection but cannot confirm eligibility.
@@ -49,8 +53,10 @@ No Monzo calls, credentials, live approval, or payment execution are introduced.
   this at migration time; execution may have happened since. The October 31 workbook
   copied from October 17 is not independent evidence of new decisions or payments.
 - `Paid = No`, exported batch files, directory dates, and `lastpostingdate.txt` do
-  not prove outstanding status. `Paid = Yes` is staged legacy evidence whose meaning
-  must be confirmed. Older execution history stays unknown unless explicitly resolved.
+  not prove outstanding status. `Paid = Yes` is evidence of external handling,
+  not payment of the credit-card bill; confirm the source match and provenance
+  before applying that handling decision. Older history without confirmed evidence
+  stays unknown unless explicitly resolved.
 - Preview every state/account change and totals before an atomic, version-checked
   commit. Repeat migration is idempotent; conflicting revisions cannot overwrite
   decisions silently. Support audited correction rather than deleting provenance.
@@ -152,6 +158,9 @@ checks, and ordinary-form/HTMX paths. No Node or external financial services.
   Ambiguous/missing-reference matches cannot silently apply decisions.
 - Copied workbooks do not duplicate purchases, inflate rule evidence, or prove
   execution. Old handled rows cannot reappear as payable after overlap/restart.
+- A matched and confirmed legacy `Paid = Yes` purchase is handled externally and
+  never contributes to outstanding totals or executable exports, including after
+  reimport or selection in another recon. `Paid = No` alone proves no handling state.
 - Exception corrections preserve originals, create no duplicate canonical purchase,
   and show any affected readiness/totals. Pending/billed links count once.
 - Rule approval/precedence, conflicts, disable/re-evaluation, and explicit override
