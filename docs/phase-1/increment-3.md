@@ -1,8 +1,8 @@
 # Phase 1 / Increment 3: Historical handling, account rules, and recon totals
 
 Status: in progress. [Slice 1](increment-3-slice-1.md) implements handling states,
-explicit recon scope, and readiness totals, with Rust verification and browser
-acceptance pending. Historical migration, exception resolution, account rules,
+explicit recon scope, and readiness totals, with Rust checks and Firefox browser
+smoke testing passing. Historical migration, exception resolution, account rules,
 and compatibility exports remain planned. Depends on [Increment 2](increment-2.md)
 and the existing identity/ledger safeguards.
 
@@ -144,7 +144,7 @@ of templates and share it between UI summaries and exporters.
 Suggested slices:
 
 1. Handling state machine, recon membership, readiness predicates, and totals —
-   implemented in [Slice 1](increment-3-slice-1.md), browser acceptance pending.
+   implemented and verified in [Slice 1](increment-3-slice-1.md).
 2. Staged historical decision migration and explicit matching/confirmation.
 3. Audited exception resolution and pending/billed links.
 4. Account-rule suggestions, approval, and provenance.

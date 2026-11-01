@@ -1,8 +1,9 @@
 # Increment 3 / Slice 1: Handling, recon scope, and totals
 
-Status: implemented. Formatting, Clippy, and all 54 Rust tests pass. The expanded
-Firefox smoke test is prepared but blocked by an existing app occupying port 7310;
-the existing process was left untouched. Browser acceptance remains pending.
+Status: implemented and verified. Formatting, Clippy, and all 54 Rust tests pass.
+The expanded Firefox smoke test also passed after the user closed the existing
+app on port 7310: import, inline HTMX edits, merchant review, restart persistence,
+explicit recon selection, external handling, and outstanding-ready totals.
 
 This is the first delivery slice of [Increment 3](increment-3.md), **not completion
 of the whole increment**. It uses synthetic inputs only; no historical workbook,

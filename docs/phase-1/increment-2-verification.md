@@ -85,11 +85,11 @@ consolidation. Coverage includes:
 The Firefox smoke script now includes catalogue upload/coalescing, bulk allocation,
 complete-view filtering, purchase overrides, default changes preserving overrides,
 clearing overrides, and restart persistence, alongside the original HTMX checks.
-The earlier attempt was blocked by geckodriver listener permissions. The latest
-consolidation attempt started geckodriver but could not start the test app because
-port 7310 is occupied. The existing process was left untouched. Stop the app and
-run `recon-browser-check` before declaring browser acceptance complete. The extended
-browser assertions (including inline filter membership refresh) remain unverified.
+Earlier attempts were blocked by geckodriver listener permissions and an existing
+app on port 7310. After the user closed that app, `recon-browser-check` passed,
+including the consolidated review screen, inline filter membership refresh,
+merchant catalogue/default/override workflow, bulk edits, filters, and restart
+persistence. It also covers Increment 3 Slice 1's scope, handling, and totals.
 
 Separate real-data validation from the plan remains pending: use a disposable
 database and a selected merchant export, report aggregate coverage/conflicts, and

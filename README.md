@@ -23,9 +23,8 @@ approval, and Monzo access are not implemented. Review-complete still means
 details complete, not evidence of funding or permission to execute.
 
 See [Increment 2 usage and verification](docs/phase-1/increment-2-verification.md).
-Rust checks pass. The extended Firefox smoke test remains pending: the latest
-attempt was blocked by an existing app on port 7310, which was left running.
-Stop the app before running `recon-browser-check`.
+Rust checks and the extended Firefox smoke test pass. Stop the app before running
+`recon-browser-check` so its temporary test instance can use port 7310.
 
 ## Development
 
