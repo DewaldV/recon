@@ -1,97 +1,55 @@
-# Phase 2: Safe Monzo execution
+# Phase 2: Monzo execution
 
-> Current implementation: immutable single-queue runs, temporary token entry,
-> preflight, stable deposit keys, persisted recovery, and automatic transaction
-> matching/annotation are implemented and covered by synthetic/mock tests. The
-> user has completed live deposits and automatic recovery of pending notes. This
-> document retains the original work packages; exports and automated stale-ledger
-> repair remain outstanding. See the
-> [current guide](single-queue-workflow.md) and D026–D029.
+Delivery summary of the original execution plan. For operator actions, see
+[Run and resume](single-queue-workflow.md#run-and-resume). D026–D029 record the
+queue, credential, note-recovery, and restore decisions.
 
-## Outcome
+## Delivered
 
-Approve and execute deposits for both accounts, with persistent progress and
-safe recovery. Keep one deposit and descriptive note per purchase.
+- One active run containing immutable Personal/Joint purchase instructions.
+- Persistent account/pot configuration and a temporary token per execution attempt.
+- Preflight validation of account type, pot ownership/currency, and available funds.
+- Stable deposit keys persisted before submission, with separate deposit/note events.
+- Sequential deposit-and-note execution, progress display, and restart/resume.
+- Persisted transaction mappings and an independent stale-restore guard.
 
-## Prerequisites
+The user reported successful live reconciliation, including automatic recovery of
+pending notes. Immediate deposit-and-note sequencing is covered by mocked tests.
 
-- Phase 1 identity, review, backup, and migration acceptance criteria pass.
-- Legacy/external payment outcomes have been resolved for selected transactions.
-- Explicit user approval before any live test or real deposit.
+## Execution contract
 
-## Work packages
+Each purchase produces one deposit. Confirmed deposits are skipped on resume;
+uncertain retries keep their original deduplication key. Timeouts do not prove
+failure. Funds checks are snapshots, not guarantees against later balance changes.
 
-### 1. Client and preflight
+A confirmed deposit removes its purchase from outstanding work. The run remains
+active until its notes finish. Resume processes pending notes first; notes-only
+recovery skips deposits and funds checks. Recorded destinations survive later
+configuration changes.
 
-- Inspect the underlying Monzo Rust client's deposit implementation; ensure callers
-  can provide a persistent `dedupe_id`, or implement that endpoint directly.
-- Accept a temporary token for each online attempt; keep it in backend memory only.
-- Import existing pot-name mappings, resolve and persist account/pot IDs, and
-  validate each pot belongs to the intended source account.
-- Validate positive integer-penny amounts, supported currency, row readiness,
-  exclusions, prior handling, destination validity, and available funds. Balance
-  checks are advisory snapshots, not guarantees against subsequent changes.
-- Paginate read APIs and handle expiry, permission errors, rate limits, and timeouts.
+## Transaction correlation
 
-### 2. Immutable approval and execution ledger
+Use a returned transaction ID when available. Otherwise query the source account's
+transactions, matching pot, exact GBP debit, and the recorded submission window
+with five seconds of clock tolerance. Paginate and retry visibility up to five times.
 
-- Preview counts/totals, exact destinations, amounts, and notes before approval.
-- Persist a versioned immutable approved plan. Editing its unsubmitted decisions
-  invalidates approval; submitted financial instructions cannot be edited/replayed.
-- Persist operation identity and `dedupe_id` before sending any deposit request.
-  Reuse that exact key for retries of the same operation, never generate one anew
-  on restart or recon-directory change.
-- Record deposit lifecycle separately from annotation lifecycle: not submitted,
-  in flight, confirmed, failed, or outcome unknown; note pending/succeeded/failed.
-- Serialize execution and prevent concurrent processes from submitting the same
-  work. Make the database transition to in-flight atomic.
+Exclude occupied mappings and unrelated notes. Existing operation markers take
+priority; complete equal-amount groups are paired chronologically. Ambiguous or
+incomplete matches remain pending. Persist mappings before annotation and reuse
+them after restart.
 
-### 3. Recovery and transaction correlation
+## Verification
 
-- Never repeat a confirmed deposit because annotating it failed.
-- Do not treat timeouts as proof of failure. Verify retry/deduplication semantics
-  and reconcile uncertain outcomes before continuing; avoid claiming exactly-once
-  behavior beyond the API's guarantees.
-- Establish a reliable way to correlate a deposit with its Monzo transaction for
-  notes. The deposit response returns pot state, not a transaction ID. Amount and
-  a one-minute time window alone are insufficient for repeated equal deposits.
-- Persist transaction IDs before annotation and leave ambiguous matches pending
-  for automatic retry/resume. No per-transaction ID entry or confirmation is required.
-- Retry safe read/note operations with bounded backoff. Use the persistent key for
-  any permitted deposit retry. Present explicit uncertain/blocked states.
-- Optionally annotate confirmed transactions with an application operation ID;
-  this helps later audits but does not solve initial transaction correlation.
+Synthetic execution and mocked HTTP tests cover immutable plans, concurrent attempts,
+partial failures, uncertain retries, restart, failed notes, repeated amounts,
+request encoding/scoping, preflight rejection, pagination, delayed visibility,
+response classification, and stale-restore rejection.
 
-### 4. Operator experience
-
-- One approved plan may include both Personal and Joint transactions.
-- Show live/polled execution progress, partial completion, and actionable errors.
-- Resume pending operations without reprocessing confirmed deposits.
-- Define completion clearly: distinguish money moved from notes completed, and
-  retain outstanding note repairs even if all deposits are confirmed.
-- Export an audit report. Fail any future automation/CLI invocation appropriately
-  on incomplete or uncertain outcomes, rather than returning silent success.
-- Transaction identity and ledger state replace manual posting-date checkpoints.
-
-## Acceptance criteria
-
-- Mock tests cover duplicate invocation, concurrent invocation, token expiry,
-  partial batches, timeout after remote success, crash before/after submission,
-  note failure, and repeated equal-amount deposits.
-- Restart/resume reuses persisted operation keys and skips confirmed deposits.
-- Destination mismatch, unresolved legacy state, invalid rows, or changed plans
-  prevent submission.
-- Tests verify no token appears in logs, database records, or browser responses.
-- A backup/restore drill documents how restored stale execution state is reconciled
-  before any further live execution.
-- A separately approved small live test verifies API behavior and correlation
-  before the October backlog is submitted.
+The [recovery procedure](development.md#backups) documents database/guard restore
+requirements. Automated ledger reconstruction and audit exports remain open.
 
 ## API references
 
-- https://docs.monzo.com/#deposit-into-a-pot
-- https://docs.monzo.com/#annotate-transaction
-- https://docs.monzo.com/#list-transactions
-
-The documented deposit endpoint requires a static `dedupe_id` across retries.
-The documented annotation endpoint updates metadata/notes, not categories.
+- [Deposit into a pot](https://docs.monzo.com/#deposit-into-a-pot): keep `dedupe_id` stable across retries.
+- [Annotate transaction](https://docs.monzo.com/#annotate-transaction): notes/metadata, not category updates.
+- [List transactions](https://docs.monzo.com/#list-transactions)

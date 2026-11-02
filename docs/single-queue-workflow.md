@@ -2,199 +2,174 @@
 
 ## Import and review
 
-1. Start Recon and open its private startup link. Import the original Virgin CSV.
-   Identical files are reused; unresolved malformed rows are retried with the
-   current automatic repair policy. Overlaps preserve decisions and source provenance.
-2. Review opens on **Needs review**. The top totals cover the global queue, even
-   when merchant/account/import filters or pagination narrow the table.
-3. Use **Merchants** to import `Merchant,Category,Description` defaults or approve
-   exact aliases. Use **Account rules** for merchant or merchant+card defaults.
-   Explicit purchase choices win, then merchant+card, then merchant-wide rules.
-   Account rules now provide a searchable merchant list (including catalogue-only
-   merchants and aliases) and a card dropdown. Choose a merchant and **Any card**
-   or a specific card, then **Load selection**. Cards seen for that merchant are
-   labelled. Existing rules load their current account, including disabled rules.
-   **Edit rule** in the rule list opens the same editor directly.
-4. Open **Review / edit** to complete a purchase. **Save for later** keeps it in
-   review; **Save and stage** atomically saves and confirms that it needs funding.
-   Set account dropdowns across the visible page, then click **Save page accounts**
-   once to save all changed choices atomically. Unchanged rows retain their rule
-   provenance and staging. The unsaved count tracks pending choices; save before
-   staging, filtering or changing pages. A stale changed row rejects the entire
-   save. Page saves refresh totals/filter membership and clear bulk selection
-   while preserving unrelated drafts. Bulk actions use page selection and an exact preview.
-5. Mark already-funded purchases **Handled externally** with evidence. **Excluded**
-   is a separate disposition. Reopening either requires explicit confirmation and
-   evidence. Merely setting an account or importing Paid No proves no funding status.
-6. Inspect source exceptions through the import result link. For a conflict you
-   can explicitly retain the canonical purchase and reject the conflicting
-   observation. Other unresolved observations need a supported non-funding
-   disposition. Original observations remain in the audit trail.
+1. Start Recon and open its private startup link. Upload the original Virgin CSV.
+   Overlaps preserve decisions and provenance; identical files are reused, with
+   unresolved malformed rows retried under the current repair policy.
+2. **Review** opens on **Needs review**. Top totals cover the whole queue,
+   regardless of filters or pagination. Rolling exports include old history;
+   importing a purchase does not establish that it still needs funding.
+3. Complete category, description, and Personal/Joint allocation through
+   **Review / edit**. **Save for later** keeps the purchase in review;
+   **Save and stage** also confirms it needs funding.
+4. To change accounts across a page, choose values and click **Save page accounts**.
+   Only changed rows are saved, atomically; a stale row rejects the whole save.
+   Save before staging, filtering, or changing pages. Saving clears page selection.
+5. For bulk edits or **Stage selected**, select purchases on the current page,
+   preview the exact changes, and confirm. Blank category/description overrides
+   fall back to merchant defaults.
+6. Mark already-funded purchases **Handled externally** with evidence. Use
+   **Excluded** for other intentional omissions. Reopening either requires evidence
+   and the reopening checkbox.
+7. Follow **View import results and exceptions** to resolve source blockers.
+   A conflict can retain the canonical purchase and reject the conflicting
+   observation; other exceptions need a supported non-funding disposition.
+   Original evidence remains in history.
 
-Staging records an exact effective-decision signature. Relevant changes return a
-purchase to review; unrelated merchant changes and identical-file reimports do
-not. **Return to review** removes approval without marking it handled. Old named
-workspace membership does not stage anything.
+Staging approves the effective account, category, and note. Relevant changes
+return a purchase to review; unrelated edits and unchanged reimports preserve
+staging. **Return to review** removes approval without marking a purchase handled.
 
-**Remember account choice** on a review row opens the rule editor with that saved
-merchant, card and account. The purchase editor also links to its saved choice;
-save purchase edits before following the link. An existing rule's current setting
-takes precedence over the suggested account. These links only open the editor.
+The interface supports one Virgin source account (`virgin-primary`). Personal/Joint
+are funding allocations. Old named workspaces are read-only history.
 
-Rule approval previews show current and proposed accounts, preserved explicit
-choices and recorded runs, and how many staged purchases need staging again.
-Card-specific previews include only matching cards; merchant-wide rules respect
-more-specific rules. Disabling a card rule falls back to the merchant-wide rule.
-Confirm and Cancel return to the selected rule. Merchant search uses local
-JavaScript; selection, loading and approval also work with ordinary HTML forms.
+## Merchant defaults and account rules
+
+Use **Merchants** to set category/description defaults or approve exact aliases.
+Matching ignores case and repeated whitespace; punctuation and digits remain
+significant. Purchase overrides take precedence. Alias chains and alias
+correction/removal are not supported.
+
+To migrate a merchant catalogue:
+
+1. Export the merchant sheet as UTF-8 CSV with headers
+   `Merchant,Category,Description`. Export formulas as displayed values and quote
+   commas, quotes, and newlines. Preserve the original workbook.
+2. Under **Merchants → Import merchant catalogue**, upload the CSV and inspect
+   normalized-name conflicts. Select one definition per merchant; unchecked
+   definitions are skipped. Existing different defaults are not selected automatically.
+3. Approve new categories and confirm the preview. Identical-file reimports
+   preserve later edits and do not reconsider skipped definitions; edit the default
+   or upload a revised CSV to change them.
+
+Use **Account rules** for merchant-wide or merchant+card allocation defaults:
+
+1. Search/select a merchant, choose **Any card** or a specific card, and click
+   **Load selection**. **Edit rule** opens an existing rule directly.
+2. Choose Personal, Joint, or **Disable this rule**.
+3. Click **Preview rule**, inspect affected purchases and staging changes, and confirm.
+
+Account precedence is purchase choice → merchant+card rule → merchant rule.
+Clearing a purchase choice restores rule fallback; disabling a card rule restores
+the merchant-wide fallback. Rules preserve explicit choices and recorded runs.
+
+**Remember saved account choice** opens the rule editor from a purchase. Save
+purchase edits first; an existing rule's setting takes precedence over the suggestion.
 
 ## Run and resume
 
-**Run recon** previews all outstanding purchases and Personal/Joint totals. It is
-available only once every outstanding purchase is staged and all source exceptions
-have dispositions. In **Configuration**, save the Personal and Joint source
-account IDs (`acc_…`) and credit-card pot IDs (`pot_…`) once. They persist locally
-across restarts and are included in database backups. Leave both fields empty for
-an allocation you do not use; every allocation in the next run needs a complete pair.
+1. In **Configuration**, save the source account ID (`acc_…`) and credit-card pot
+   ID (`pot_…`) for Personal and Joint. Leave both fields empty for an unused
+   allocation. Settings persist across restarts and are included in backups.
+2. Open **Run recon**. Every outstanding purchase must be staged and all source
+   blockers resolved. The preview includes the whole outstanding queue.
+3. Check totals, destinations, and notes. Enter a temporary Monzo token and click
+   **Confirm and run recon**. Preflight checks account type, pot ownership/currency,
+   and source-account funds, excluding money held in pots.
 
-The run preview displays the saved destinations and asks only for a temporary Monzo
-token. Confirming starts one automatically numbered run with immutable instructions.
-Preflight checks account type, pot ownership/currency, and available funds.
-Failures identify the Personal/Joint allocation and the failed lookup, status,
-currency or balance check. API failures include the endpoint and HTTP status;
-the same locally composed diagnostic is written to the process log. Tokens,
-account/pot IDs and raw remote response bodies are not included. Available funds
-means the source account balance, excluding money already held in pots.
+Each purchase creates one deposit followed by its note. Instructions and
+deduplication keys are persisted before submission. Configuration changes affect
+future runs and invalidate open previews; active runs retain their destinations.
+New imports wait for the next run.
 
-Configuration changes apply to future runs and invalidate open run previews;
-reload the preview before submitting a token. Purchase staging is preserved.
-An active or resumed run always uses its recorded destinations, even if settings
-subsequently change. Configuration never accepts or stores an access token.
+After interruption, open **History → Recon #…** and **Resume recon** with a fresh
+token. Confirmed deposits are skipped; uncertain deposits reuse their original
+keys. An error does not prove that no money moved.
 
-Each purchase creates one pot deposit, using a key persisted before submission,
-then automatically applies its note before continuing to the next purchase.
-Results refresh while running. On interruption, reopen **History → Recon #…** and
-resume with a fresh token. Confirmed deposits are skipped. Unknown/in-flight
-deposits reuse the same key; errors do not prove that no money moved. New imports
-remain outside an existing immutable run and await the next run.
+Deposit and note progress are separate. A confirmed deposit is funded even while
+its note is pending. Recon finds and saves transaction mappings automatically;
+ambiguous matches remain pending. Resume processes pending notes first. A
+notes-only resume skips deposits and funds checks. Another run can start only
+after all deposits and notes finish.
 
-Deposit and note outcomes are recorded separately. A confirmed deposit is funded
-even while its note is pending. Transaction IDs are used directly when returned;
-otherwise Recon automatically queries the source account's transactions, matching
-the pot, exact GBP debit and recorded submission window (with five seconds of
-clock tolerance). Lookup is paginated and retried up to five times for visibility.
-Already assigned transactions and unrelated existing notes are excluded. For older
-deposits-only runs, complete equal-amount groups are assigned one-to-one in creation
-order; ambiguous or incomplete matches remain pending for a later resume.
-
-Mappings are persisted before annotation and reused after failure or restart.
-**Resume recon** applies pending notes first, including notes from older runs.
-It needs only a fresh token, with no transaction-ID entry or per-note confirmation.
-A notes-only resume does not require funds checks or submit deposits. A run remains
-active until all deposits and notes are complete, and blocks starting another run.
-
-Tokens are used in backend memory for that attempt. Forms clear submitted token
-fields, responses are not cached, and credentials are not written to SQLite or
-logs. Destinations and execution results are persisted. See [backups and recovery](development.md#backups)
-before restoring execution data.
+Tokens remain in backend memory for the attempt. Read the
+[backup and recovery instructions](development.md#backups) before restoring execution data.
 
 ## Automatic Virgin CSV repair
 
-Standard-layout exports with extra unquoted commas use the same naming convention
-as `monzo batch vcc`: surplus middle columns are joined with spaces into the
-merchant name, retaining the last ten fields. This can include city fragments;
-it deliberately matches existing merchant catalogue names from the CLI workflow.
-Dates, amounts, reference, country, card and trailing classification fields must
-validate. Already correctly quoted CSV is parsed normally. Nonstandard column
-layouts, missing fields, invalid anchors and duplicate references remain for review.
-Credits, fees and pending records keep their classifications rather than becoming
-fundable purchases. The permanent posting-date boundary also applies to repairs.
+For standard-layout exports with extra unquoted commas, Recon joins surplus
+merchant columns with spaces, matching `monzo batch vcc` catalogue names. Remaining
+fields must validate. Quoted CSV is parsed normally; unsupported layouts, missing
+fields, invalid anchors, and duplicate references remain for review.
 
-Import results show **automatic CSV repairs**, including the original text and
-parsed fields. Original archives and observations remain immutable. Repaired
-purchases use existing merchant/account defaults but are never automatically staged.
+Import results show **automatic CSV repairs** with original text and parsed fields.
+Repaired rows retain their purchase/credit/fee/pending classification and the
+posting-date boundary. Purchases receive defaults but still need staging.
 
-Re-upload an earlier file to recover its repairable, unresolved malformed rows.
-Recovery creates a linked corrected import, then dispositions the original rows
-in the same transaction. Existing manual dispositions are preserved. Repeated
-reuploads do not repeat repairs or duplicate purchases. With the app stopped,
-the equivalent maintenance command is:
+Re-upload an earlier file to recover repairable, unresolved malformed rows. This
+creates a linked corrected import and resolves the original observations atomically.
+Manual dispositions are preserved; repeated uploads do not duplicate repairs.
+Recovery takes a verified backup and requires no active run.
+
+Alternatively, stop the app and run this for the import ID shown in its results:
 
 ```sh
 cargo run -- --repair-import 1
 ```
 
-Use the running app's `--data-dir` if configured. Recovery takes a verified backup
-and rejects an active run; failures roll back the corrected import, purchases,
-repair provenance and original dispositions together.
+Include the app's `--data-dir` when using a custom database.
 
-## One-time historical CSV
+## Historical migration
 
-### Starting from a fixed cutover instead
+### Fixed posting-date cutover
 
-If the spreadsheets remain authoritative for earlier, completed reconciliation,
-configure a permanent inclusive **posting-date** boundary with the app stopped:
+If spreadsheets remain authoritative for completed earlier reconciliation, stop
+the app and set a permanent inclusive **posting-date** boundary:
 
 ```sh
 cargo run -- --start-date YYYY-MM-DD --cutover-reason "Earlier purchases were reconciled in the historical spreadsheets"
 ```
 
-Use the same `--data-dir` as the running app if you use a custom data directory.
-The command creates a verified backup and atomically excludes purchases with
-posting dates **strictly before** the boundary. Purchases on the boundary stay in
-scope, matching `monzo batch vcc`'s `posting_date >= filter_date` rule. Account
-choices, details and staging for in-scope purchases are preserved. Existing source
-records remain available under **Handled / excluded** and in purchase history.
+Include the app's `--data-dir` when using a custom database. The command takes a
+verified backup and excludes unresolved/outstanding purchases strictly before the
+boundary. Purchases on the date remain in scope; their decisions and staging are
+preserved. Earlier records remain visible under **Handled / excluded**.
 
-The boundary persists in SQLite and applies to future full/overlapping imports.
-It is not a rolling last-run date. The same date can be applied again without
-duplicating decisions; changing an established boundary is rejected. Pre-cutover
-purchases cannot be reopened into the outstanding queue. Active runs and recorded
-run instructions crossing the boundary block configuration.
+The boundary applies to future imports. It cannot be changed, and pre-cutover
+purchases cannot be reopened. Active runs or recorded instructions before the
+boundary block configuration. Reapplying the same date does not duplicate decisions.
 
-Source exceptions with a valid pre-cutover posting date are given a historical
-disposition. Missing/unreadable dates and conflicts against in-scope purchases
-remain for review. Import displays the configured start date. Keep the resulting
-database backup and the latest `execution.guard` using the normal backup process.
+Source exceptions with valid earlier posting dates receive historical dispositions.
+Unreadable dates and conflicts against in-scope purchases still need review.
+Preserve the resulting backup and latest `execution.guard`.
 
-### Importing historical decisions
+### Historical decisions CSV
 
-On Import, expand **One-time historical decisions**. Prepare a UTF-8 CSV with
-exact columns (order may vary):
+On **Import**, expand **One-time historical decisions**. Prepare a UTF-8 CSV with
+these exact columns (order may vary):
 
 ```csv
 Reference,Account,Category,Description,Paid,Reason
 00000000000000000000001,Personal,Shopping,Synthetic groceries,Yes,Verified source reference and external funding
 ```
 
-Keep references as text with leading zeros, and verify matches against the original
-source. Account accepts Personal/Joint or blank; Paid accepts Yes/No or blank.
-Reason is required (up to 3,500 bytes); at most 100 distinct purchases per file.
-Unknown/duplicate references and conflicted purchases are rejected. Review the
-matched purchases and proposals before confirmation; approve new categories explicitly.
+- Preserve references as text, including leading zeros, and verify source matches.
+- Account accepts Personal/Joint or blank; Paid accepts Yes/No or blank.
+- Reason is required (up to 3,500 bytes); files allow at most 100 distinct purchases.
+- Unknown/duplicate references and conflicted purchases are rejected.
 
-Existing explicit account decisions, including cleared choices, purchase-detail
-versions, handling decisions and run instructions are preserved. Paid Yes records
-external handling only without an existing handling decision. Paid No or blank
-does not establish outstanding status. Imports never stage. Raw bytes, proposals
-and previous snapshots are retained; identical historical files are no-ops.
+Review the matched purchases and proposals, approve new categories, then confirm.
+Existing explicit account, detail, handling, and run records take precedence.
+`Paid = Yes` records external funding only when no handling decision exists;
+`Paid = No` or blank proves no funding status. Historical imports never stage
+purchases. Original bytes and proposals are retained; identical files are no-ops.
 
-## Verification and remaining work
+## Remaining work
 
-`recon-check` runs formatting, Clippy and the Rust suite. Tests cover source
-identity, migration, rules/staging, atomic edits, historical import and rollback,
-immutable runs, partial failures, restart, uncertain retries, note mapping reuse,
-stale restore rejection, and HTTP protections. Local mocked Monzo HTTP tests check
-request encoding/scoping, preflight failures, pagination, delayed visibility,
-repeated-amount matching and response classification.
-`recon-browser-check` uses synthetic data in Firefox for imports, merchant/rule
-approval, draft/focus preservation, bulk/individual staging, source dispositions,
-run preview, restart and token-only note recovery. It never submits a Monzo credential.
+- General malformed-source and missing-reference repair.
+- Pending-to-billed linking and refund/fee execution.
+- Export/handoff and audit reports.
+- Automated stale-ledger reconstruction.
 
-The user has completed a live reconciliation, including automatic recovery of its
-pending notes. Immediate deposit-and-note sequencing is covered by the mocked suite.
-
-Still outstanding: missing-reference/general malformed-source repair,
-pending-to-billed linking, refund/fee execution, exports, and automated stale-ledger
-reconstruction. Source dispositions only resolve evidence already understood; they
-are not a substitute for repairing a genuinely payable missing purchase.
+Source dispositions resolve understood evidence; repair is still needed for a
+genuinely payable purchase missing from the queue. See
+[workflow improvements](phase-3-workflow-improvements.md) for other candidates.
