@@ -10,6 +10,7 @@ Enter the devenv environment with `direnv allow`, or prefix a command with
 | `cargo run` | Run with the regular data directory. |
 | `recon-dev` | Watch/run against `/tmp/opencode/recon-development`. |
 | `recon-check` | Check formatting, Clippy with warnings denied, and all Rust tests. |
+| `recon-coverage` | Run Rust tests with coverage; print a summary and generate HTML. |
 | `recon-browser-check` | Build and run the headless Firefox smoke test. |
 
 Browser checks require free ports **7310** and **4444**. devenv supplies Python
@@ -21,6 +22,10 @@ identity, rules/staging, atomic edits, historical imports, immutable runs, retri
 note matching, restore rejection, and HTTP protections. Firefox covers imports,
 merchant/rule approval, draft/focus preservation, staging, configuration, source
 dispositions, run preview, restart, and the token-only note-recovery form.
+
+`recon-coverage` uses devenv's `cargo-llvm-cov` and matching LLVM tools. Open
+`target/llvm-cov/html/index.html` for per-file line, function, and region coverage.
+The report covers Rust tests; browser/JavaScript and branch coverage are not included.
 
 ## Runtime protections
 
